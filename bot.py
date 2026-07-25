@@ -353,6 +353,26 @@ async def main_polling() -> None:
     await dp.start_polling(bot)
 
 
+async def _keep_alive(base_url: str, interval: int) -> None:
+    """Ping our own public URL every `interval` seconds so Render's free tier
+    doesn't spin the service down for inactivity. The request goes through Render's
+    edge, so it counts as real traffic (a localhost ping would not)."""
+    import aiohttp
+
+    url = f"{base_url}/healthz"
+    await asyncio.sleep(interval)  # let startup settle first
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    log.info("keep-alive ping -> %s", resp.status)
+            except Exception as exc:
+                log.info("keep-alive ping failed: %s", exc)
+            await asyncio.sleep(interval)
+
+
 def main_webhook() -> None:
     """Run as an aiohttp web server (for Render free Web Service)."""
     from aiohttp import web
@@ -364,6 +384,8 @@ def main_webhook() -> None:
     secret = os.getenv("WEBHOOK_SECRET", "").strip() or "igbot-secret"
     path = f"/webhook/{secret}"
     webhook_url = f"{base_url}{path}"
+    keepalive_on = os.getenv("KEEPALIVE", "1").strip() not in ("0", "false", "")
+    keepalive_secs = int(os.getenv("KEEPALIVE_SECONDS", "300"))
 
     bot = _make_bot()
 
@@ -373,6 +395,9 @@ def main_webhook() -> None:
             allowed_updates=dp.resolve_used_update_types(),
         )
         log.info("Webhook set -> %s", webhook_url)
+        if keepalive_on and base_url:
+            asyncio.create_task(_keep_alive(base_url, keepalive_secs))
+            log.info("Keep-alive enabled: pinging every %ss", keepalive_secs)
         if insta_client is None:
             log.warning("IG credentials not set — stories/highlights/pfp disabled.")
 
