@@ -1,0 +1,21 @@
+# Render Blueprint (optional). The service is also created via the Render API,
+# but this file documents the setup and enables one-click Blueprint deploys.
+services:
+  - type: web
+    name: instagram-downloader-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false        # set in dashboard — secret
+      - key: IG_USERNAME
+        sync: false
+      - key: IG_SESSIONID
+        sync: false        # secret; from a burner account's browser session
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: "50"

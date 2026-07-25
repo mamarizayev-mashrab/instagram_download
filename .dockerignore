@@ -1,0 +1,14 @@
+.env
+.sessions/
+cache.json
+__pycache__/
+*.pyc
+.git/
+.gitignore
+*.mp4
+*.jpg
+*.jpeg
+*.png
+.venv/
+venv/
+setup_session.py
