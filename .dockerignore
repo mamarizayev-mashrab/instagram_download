@@ -1,6 +1,7 @@
 .env
 .sessions/
 cache.json
+userlang.json
 __pycache__/
 *.pyc
 .git/

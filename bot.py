@@ -16,7 +16,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
+    CallbackQuery,
     FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     InputMediaPhoto,
     InputMediaVideo,
     Message,
@@ -27,6 +30,7 @@ from downloaders import insta_downloader, ytdlp_downloader
 from downloaders.insta_downloader import InstaAuthError, InstaClient, InstaDownloadError
 from downloaders.ytdlp_downloader import DownloadError
 from utils import cache
+from utils import i18n
 from utils.compress import compress_video
 from utils.files import collect_media, is_video, size_mb, temp_workdir
 from utils.media_meta import probe_with_thumb
@@ -57,39 +61,50 @@ insta_client: InstaClient | None = (
 
 dp = Dispatcher()
 
-WELCOME = (
-    "👋 <b>Instagram Downloader Bot</b>\n\n"
-    "Send me an Instagram link and I'll fetch the media for you.\n\n"
-    "<b>Supported:</b>\n"
-    "• Reels & feed videos\n"
-    "• Posts (photo / video / carousel)\n"
-    "• IGTV\n"
-    "• Stories — <code>@username stories</code> or a /stories/ link\n"
-    "• Highlights\n"
-    "• HD profile picture — <code>@username pfp</code>\n\n"
-    "Just paste a link to begin. Type /help for examples."
-)
 
-HELP = (
-    "<b>How to use</b>\n\n"
-    "1️⃣ Public video/reel:\n<code>https://www.instagram.com/reel/XXXX/</code>\n\n"
-    "2️⃣ Post (photo/carousel):\n<code>https://www.instagram.com/p/XXXX/</code>\n\n"
-    "3️⃣ Stories:\n<code>@username stories</code>\n\n"
-    "4️⃣ HD profile picture:\n<code>@username pfp</code>\n\n"
-    "5️⃣ Highlights:\n<code>@username highlights</code>\n\n"
-    "ℹ️ Stories, highlights and profile pictures need the bot's Instagram login "
-    "to be configured by the owner."
-)
+def _lang_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with the four language options."""
+    buttons = [
+        InlineKeyboardButton(text=name, callback_data=f"setlang:{code}")
+        for code, name in i18n.LANG_NAMES.items()
+    ]
+    # Two per row.
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    await message.answer(WELCOME)
+    uid = message.from_user.id
+    await message.answer(i18n.t(uid, "welcome"))
+    # First-time users: also show the language picker.
+    if not i18n.has_lang(uid):
+        await message.answer(i18n.t(uid, "lang_choose"), reply_markup=_lang_keyboard())
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    await message.answer(HELP)
+    await message.answer(i18n.t(message.from_user.id, "help"))
+
+
+@dp.message(Command("language", "lang"))
+async def cmd_language(message: Message) -> None:
+    await message.answer(
+        i18n.t(message.from_user.id, "lang_choose"), reply_markup=_lang_keyboard()
+    )
+
+
+@dp.callback_query(F.data.startswith("setlang:"))
+async def on_set_language(call: CallbackQuery) -> None:
+    code = call.data.split(":", 1)[1]
+    i18n.set_lang(call.from_user.id, code)
+    await call.answer()
+    # Confirm + re-show the welcome in the newly chosen language.
+    try:
+        await call.message.edit_text(i18n.t(call.from_user.id, "lang_set"))
+    except Exception:
+        await call.message.answer(i18n.t(call.from_user.id, "lang_set"))
+    await call.message.answer(i18n.t(call.from_user.id, "welcome"))
 
 
 def _needs_login(req: ParsedRequest) -> bool:
@@ -116,7 +131,7 @@ def _looks_rate_limited(exc: Exception) -> bool:
     return any(s in msg for s in ("wait a few minutes", "429", "rate", "too many", "please wait"))
 
 
-async def _dispatch_with_retry(req: ParsedRequest, workdir, status: Message) -> list:
+async def _dispatch_with_retry(req: ParsedRequest, workdir, status: Message, uid: int) -> list:
     """Run the download, retrying with backoff when Instagram rate-limits us."""
     delays = [8, 20, 40]  # seconds between attempts
     last_exc: Exception | None = None
@@ -129,7 +144,7 @@ async def _dispatch_with_retry(req: ParsedRequest, workdir, status: Message) -> 
                 wait = delays[attempt]
                 log.info("Rate-limited, retrying in %ss (attempt %s)", wait, attempt + 1)
                 try:
-                    await status.edit_text(f"⏳ Instagram is busy — retrying in {wait}s...")
+                    await status.edit_text(i18n.t(uid, "retrying", sec=wait))
                 except Exception:
                     pass
                 await asyncio.sleep(wait)
@@ -192,7 +207,7 @@ async def _fit_limit(message: Message, path):
         return path
     if not is_video(path):
         return None  # can't shrink a photo meaningfully
-    await message.answer("📦 Video is large — compressing to fit Telegram's limit...")
+    await message.answer(i18n.t(message.from_user.id, "compressing"))
     smaller = await asyncio.to_thread(compress_video, path, MAX_UPLOAD_MB, FFMPEG_LOCATION)
     if smaller and size_mb(smaller) <= MAX_UPLOAD_MB:
         return smaller
@@ -225,11 +240,7 @@ async def _send_media(message: Message, files: list) -> list[dict]:
             too_big += 1
 
     if not sendable:
-        await message.answer(
-            "⚠️ The media is larger than "
-            f"{MAX_UPLOAD_MB:.0f} MB even after compression — Telegram bots can't upload it.\n"
-            "Tip: the owner can run a local Bot API server to raise this limit to ~2 GB."
-        )
+        await message.answer(i18n.t(message.from_user.id, "too_large", mb=MAX_UPLOAD_MB))
         return []
 
     sent_ids: list[dict] = []
@@ -266,7 +277,7 @@ async def _send_media(message: Message, files: list) -> list[dict]:
 
     if too_big:
         await message.answer(
-            f"⚠️ Skipped {too_big} file(s) still over {MAX_UPLOAD_MB:.0f} MB after compression."
+            i18n.t(message.from_user.id, "too_big", n=too_big, mb=MAX_UPLOAD_MB)
         )
     return sent_ids
 
@@ -296,20 +307,15 @@ async def _send_from_cache(message: Message, items: list[dict]) -> bool:
 
 @dp.message(F.text)
 async def handle_link(message: Message) -> None:
+    uid = message.from_user.id
     req = parse(message.text)
 
     if req.content_type == ContentType.UNKNOWN:
-        await message.answer(
-            "🤔 I couldn't recognize that. Send an Instagram link, "
-            "or <code>@username stories</code> / <code>@username pfp</code>.\nType /help for examples."
-        )
+        await message.answer(i18n.t(uid, "unknown"))
         return
 
     if _needs_login(req) and insta_client is None:
-        await message.answer(
-            "🔒 Stories, highlights and profile pictures need the bot's Instagram login, "
-            "which the owner hasn't configured yet."
-        )
+        await message.answer(i18n.t(uid, "needs_login"))
         return
 
     # Instant path: resend from cache if we've uploaded this exact content before.
@@ -320,10 +326,10 @@ async def handle_link(message: Message) -> None:
             log.info("Cache hit for %s", key)
             return
 
-    status = await message.answer("⏳ Downloading...")
+    status = await message.answer(i18n.t(uid, "downloading"))
     try:
         with temp_workdir() as workdir:
-            files = await _dispatch_with_retry(req, workdir, status)
+            files = await _dispatch_with_retry(req, workdir, status, uid)
             files = collect_media(workdir) or files
             sent = await _send_media(message, files)
             if key and sent:
@@ -331,13 +337,13 @@ async def handle_link(message: Message) -> None:
         await status.delete()
     except (InstaAuthError,) as exc:
         log.warning("Auth error: %s", exc)
-        await status.edit_text("🔑 Instagram login problem. The owner should re-check credentials.")
+        await status.edit_text(i18n.t(uid, "auth_error"))
     except (DownloadError, InstaDownloadError) as exc:
         log.info("Download error: %s", exc)
-        await status.edit_text(f"❌ Couldn't download that.\n<i>{exc}</i>")
+        await status.edit_text(i18n.t(uid, "download_error", err=exc))
     except Exception as exc:  # never let one bad request kill the bot
         log.exception("Unexpected error")
-        await status.edit_text("💥 Something went wrong. Please try again later.")
+        await status.edit_text(i18n.t(uid, "unexpected"))
 
 
 def _make_bot() -> Bot:
