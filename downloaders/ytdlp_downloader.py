@@ -76,6 +76,28 @@ async def download(url: str, workdir: Path) -> list[Path]:
 _YT_HEIGHTS = {"360": 360, "720": 720, "1080": 1080}
 
 
+def _apply_youtube_auth(ydl_opts: dict) -> None:
+    """Help get past YouTube's "confirm you're not a bot" check on datacenter
+    IPs (Render, etc.).
+
+    - YOUTUBE_COOKIES_FILE: path to a Netscape cookies.txt exported from a
+      browser logged in to YouTube. This is the reliable fix.
+    - YOUTUBE_PLAYER_CLIENT: comma-separated yt-dlp player clients to try
+      (e.g. "android,web_safari,tv"); some clients dodge the bot check.
+    """
+    cookiefile = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
+    if cookiefile and Path(cookiefile).exists():
+        ydl_opts["cookiefile"] = cookiefile
+
+    clients = os.getenv("YOUTUBE_PLAYER_CLIENT", "").strip()
+    if clients:
+        ydl_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": [c.strip() for c in clients.split(",") if c.strip()]
+            }
+        }
+
+
 def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Path]:
     outtmpl = str(workdir / "%(id)s.%(ext)s")
     ffmpeg = _ffmpeg_location()
@@ -91,6 +113,7 @@ def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Pa
     }
     if ffmpeg:
         ydl_opts["ffmpeg_location"] = ffmpeg
+    _apply_youtube_auth(ydl_opts)
 
     if quality == "audio":
         if ffmpeg:
