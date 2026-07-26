@@ -5,6 +5,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# Deno is the JS runtime yt-dlp (+ yt-dlp-ejs) uses to solve YouTube's "n"
+# challenge; without it YouTube returns no downloadable formats.
+COPY --from=denoland/deno:bin-2.9.4 /deno /usr/local/bin/deno
+ENV DENO_DIR=/tmp/deno
+
 WORKDIR /app
 
 COPY requirements.txt .
