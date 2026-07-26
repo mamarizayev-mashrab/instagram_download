@@ -24,6 +24,10 @@ def test_translate_falls_back_and_formats():
 
 
 def test_new_keys_exist():
-    for key in ("probing", "yt_choose"):
+    for key in ("probing", "yt_choose", "downloading_pct", "merging"):
         for lang in i18n.LANGS:
             assert key in i18n.TEXTS[lang], f"{lang} missing {key}"
+
+
+def test_progress_formats():
+    assert "42" in i18n.t(0, "downloading_pct", pct=42)

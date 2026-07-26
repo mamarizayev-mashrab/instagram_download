@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import secrets
+import time
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -67,6 +68,10 @@ _download_sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 # A valid YouTube video id (used to sanity-check callback data before building a URL).
 _YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+# Where to send operational alerts (cookie expiry, unexpected errors). Optional.
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
+_alert_cooldown: dict[str, float] = {}
 
 if not BOT_TOKEN:
     raise SystemExit("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
@@ -137,6 +142,12 @@ async def cmd_help(message: Message) -> None:
     await message.answer(i18n.t(message.from_user.id, "help"))
 
 
+@dp.message(Command("id"))
+async def cmd_id(message: Message) -> None:
+    # Handy for setting ADMIN_CHAT_ID: reply with this chat's numeric id.
+    await message.answer(f"<code>{message.chat.id}</code>")
+
+
 @dp.message(Command("language", "lang"))
 async def cmd_language(message: Message) -> None:
     uid = message.from_user.id
@@ -192,8 +203,11 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
     try:
         async with _download_sem:
             with temp_workdir() as workdir:
-                files = await ytdlp_downloader.download_youtube(
-                    url, workdir, quality, MAX_UPLOAD_MB
+                files = await _download_with_progress(
+                    lambda h: ytdlp_downloader.download_youtube(
+                        url, workdir, quality, MAX_UPLOAD_MB, progress_hook=h
+                    ),
+                    status, uid,
                 )
                 files = collect_media(workdir) or files
                 if quality == "audio":
@@ -206,9 +220,78 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
     except DownloadError as exc:
         log.info("YouTube download error: %s", exc)
         await status.edit_text(i18n.t(uid, "download_error", err=exc))
-    except Exception:
+        if _looks_like_auth_issue(exc):
+            await _alert_admin(
+                call.bot, "yt_auth",
+                f"YouTube download failing — cookies may have expired.\n{exc}",
+            )
+    except Exception as exc:
         log.exception("Unexpected YouTube error")
         await status.edit_text(i18n.t(uid, "unexpected"))
+        await _alert_admin(call.bot, "yt_unexpected", f"Unexpected YouTube error: {exc}")
+
+
+async def _alert_admin(bot: Bot, key: str, text: str, cooldown: int = 600) -> None:
+    """Send an operational alert to the admin chat, de-duplicated per `key`."""
+    if not ADMIN_CHAT_ID:
+        return
+    now = time.monotonic()
+    if now - _alert_cooldown.get(key, 0) < cooldown:
+        return
+    _alert_cooldown[key] = now
+    try:
+        await bot.send_message(int(ADMIN_CHAT_ID), f"⚠️ {text}"[:4000])
+    except Exception as exc:
+        log.warning("Admin alert failed: %s", exc)
+
+
+def _looks_like_auth_issue(exc: Exception) -> bool:
+    """Heuristic: does this failure smell like expired cookies / a login wall?"""
+    m = str(exc).lower()
+    return any(
+        s in m for s in (
+            "sign in", "not a bot", "confirm you", "cookies", "login required",
+            "unauthorized", "age-restricted", "private video", "members-only",
+        )
+    )
+
+
+def _make_progress(state: dict):
+    """Build a yt-dlp progress hook that records percent/stage into `state`.
+    Runs in the download worker thread; only does cheap dict writes."""
+    def hook(d: dict) -> None:
+        st = d.get("status")
+        if st == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            done = d.get("downloaded_bytes") or 0
+            if total:
+                state["pct"] = max(state.get("pct", 0), int(done / total * 100))
+        elif st == "finished":
+            state["stage"] = "merge"
+    return hook
+
+
+async def _download_with_progress(factory, status: Message, uid: int) -> list:
+    """Run a download coroutine (built by `factory(hook)`) while live-editing
+    `status` with the current percentage every few seconds."""
+    state: dict = {"pct": 0, "stage": "download"}
+    task = asyncio.create_task(factory(_make_progress(state)))
+    last = ""
+    while not task.done():
+        done, _ = await asyncio.wait({task}, timeout=3)
+        if done:
+            break
+        if state["stage"] == "merge":
+            txt = i18n.t(uid, "merging")
+        else:
+            txt = i18n.t(uid, "downloading_pct", pct=state["pct"])
+        if txt != last:
+            try:
+                await status.edit_text(txt)
+            except Exception:
+                pass
+            last = txt
+    return await task
 
 
 def _needs_login(req: ParsedRequest) -> bool:
@@ -468,8 +551,11 @@ async def handle_link(message: Message) -> None:
         try:
             async with _download_sem:
                 with temp_workdir() as workdir:
-                    files = await ytdlp_downloader.download_generic(
-                        req.url, workdir, MAX_UPLOAD_MB
+                    files = await _download_with_progress(
+                        lambda h: ytdlp_downloader.download_generic(
+                            req.url, workdir, MAX_UPLOAD_MB, progress_hook=h
+                        ),
+                        status, uid,
                     )
                     files = collect_media(workdir) or files
                     await _send_media(message, files, uid)
@@ -477,9 +563,10 @@ async def handle_link(message: Message) -> None:
         except DownloadError as exc:
             log.info("Generic download error: %s", exc)
             await status.edit_text(i18n.t(uid, "download_error", err=exc))
-        except Exception:
+        except Exception as exc:
             log.exception("Unexpected generic error")
             await status.edit_text(i18n.t(uid, "unexpected"))
+            await _alert_admin(message.bot, "generic_unexpected", f"Generic error: {exc}")
         return
 
     if _needs_login(req) and insta_client is None:
@@ -507,12 +594,14 @@ async def handle_link(message: Message) -> None:
     except (InstaAuthError,) as exc:
         log.warning("Auth error: %s", exc)
         await status.edit_text(i18n.t(uid, "auth_error"))
+        await _alert_admin(message.bot, "ig_auth", f"Instagram auth/session problem:\n{exc}")
     except (DownloadError, InstaDownloadError) as exc:
         log.info("Download error: %s", exc)
         await status.edit_text(i18n.t(uid, "download_error", err=exc))
     except Exception as exc:  # never let one bad request kill the bot
         log.exception("Unexpected error")
         await status.edit_text(i18n.t(uid, "unexpected"))
+        await _alert_admin(message.bot, "ig_unexpected", f"Unexpected error: {exc}")
 
 
 def _make_bot() -> Bot:

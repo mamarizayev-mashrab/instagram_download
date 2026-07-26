@@ -114,7 +114,7 @@ def _apply_youtube_auth(ydl_opts: dict, workdir: Path) -> None:
 
 
 def _blocking_download_youtube(
-    url: str, workdir: Path, quality: str, max_mb: float
+    url: str, workdir: Path, quality: str, max_mb: float, progress_hook=None
 ) -> list[Path]:
     outtmpl = str(workdir / "%(id)s.%(ext)s")
     ffmpeg = _ffmpeg_location()
@@ -123,6 +123,7 @@ def _blocking_download_youtube(
         "outtmpl": outtmpl,
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,     # our own progress goes to Telegram, not the log
         "noplaylist": True,     # a single video even if the link carries a playlist
         "retries": 3,
         "socket_timeout": 30,
@@ -130,6 +131,8 @@ def _blocking_download_youtube(
     }
     if ffmpeg:
         ydl_opts["ffmpeg_location"] = ffmpeg
+    if progress_hook:
+        ydl_opts["progress_hooks"] = [progress_hook]
     _apply_youtube_auth(ydl_opts, workdir)
 
     # Size budget so the result fits Telegram's limit WITHOUT re-encoding — the
@@ -184,17 +187,19 @@ def _blocking_download_youtube(
 
 
 async def download_youtube(
-    url: str, workdir: Path, quality: str = "720", max_mb: float = 50.0
+    url: str, workdir: Path, quality: str = "720", max_mb: float = 50.0,
+    progress_hook=None,
 ) -> list[Path]:
     """Download a YouTube video at a given quality, or its audio as MP3.
 
     `quality` is one of "360", "720", "1080" (video) or "audio" (MP3/m4a).
     `max_mb` biases format selection toward a rendition that fits the upload
-    limit, so no re-encoding is needed.
+    limit, so no re-encoding is needed. `progress_hook` is a yt-dlp progress
+    callback (invoked from the worker thread).
     """
     try:
         return await asyncio.to_thread(
-            _blocking_download_youtube, url, workdir, quality, max_mb
+            _blocking_download_youtube, url, workdir, quality, max_mb, progress_hook
         )
     except DownloadError:
         raise
@@ -293,7 +298,9 @@ async def probe_youtube(url: str) -> dict | None:
 
 # ---- generic hosts (TikTok / X / Facebook / …) -------------------------------
 
-def _blocking_download_generic(url: str, workdir: Path, max_mb: float) -> list[Path]:
+def _blocking_download_generic(
+    url: str, workdir: Path, max_mb: float, progress_hook=None
+) -> list[Path]:
     outtmpl = str(workdir / "%(id)s.%(ext)s")
     ffmpeg = _ffmpeg_location()
     budget = max(10, int(max_mb * 0.96))
@@ -303,11 +310,14 @@ def _blocking_download_generic(url: str, workdir: Path, max_mb: float) -> list[P
         "outtmpl": outtmpl,
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
         "noplaylist": True,
         "retries": 3,
         "socket_timeout": 30,
         "nocheckcertificate": True,
     }
+    if progress_hook:
+        ydl_opts["progress_hooks"] = [progress_hook]
     if ffmpeg:
         ydl_opts["ffmpeg_location"] = ffmpeg
         ydl_opts["merge_output_format"] = "mp4"
@@ -330,11 +340,15 @@ def _blocking_download_generic(url: str, workdir: Path, max_mb: float) -> list[P
     return files
 
 
-async def download_generic(url: str, workdir: Path, max_mb: float = 50.0) -> list[Path]:
+async def download_generic(
+    url: str, workdir: Path, max_mb: float = 50.0, progress_hook=None
+) -> list[Path]:
     """Download a video from any yt-dlp-supported host (TikTok/X/Facebook/…),
     picking the best rendition that fits the upload limit."""
     try:
-        return await asyncio.to_thread(_blocking_download_generic, url, workdir, max_mb)
+        return await asyncio.to_thread(
+            _blocking_download_generic, url, workdir, max_mb, progress_hook
+        )
     except DownloadError:
         raise
     except Exception as exc:
