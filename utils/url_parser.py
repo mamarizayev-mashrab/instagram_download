@@ -16,6 +16,7 @@ class ContentType(str, Enum):
     PROFILE_PIC = "profile_pic"  # login → instaloader
     USER_STORIES = "user_stories"  # login → instaloader
     YOUTUBE = "youtube"    # public → yt-dlp, user picks quality/audio
+    GENERIC = "generic"    # TikTok / X / Facebook / … → yt-dlp best-fitting
     UNKNOWN = "unknown"
 
 
@@ -36,6 +37,17 @@ _YOUTUBE_RE = re.compile(
 _YT_ID_RE = re.compile(
     r"(?:youtu\.be/|youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/|v/))"
     r"([A-Za-z0-9_-]{11})",
+    re.IGNORECASE,
+)
+# Other public video hosts yt-dlp handles well → downloaded directly (best that fits).
+_GENERIC_RE = re.compile(
+    r"https?://\S*?(?:"
+    r"tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|"
+    r"twitter\.com|x\.com|"
+    r"facebook\.com|fb\.watch|fb\.com|"
+    r"pinterest\.[a-z.]+|pin\.it|"
+    r"reddit\.com|redd\.it"
+    r")/\S+",
     re.IGNORECASE,
 )
 _SHORTCODE_RE = re.compile(r"instagram\.com/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)", re.IGNORECASE)
@@ -84,6 +96,11 @@ def parse(text: str) -> ParsedRequest:
             )
         # A YouTube link with no recognizable video id (channel/playlist/etc.).
         return ParsedRequest(ContentType.UNKNOWN, url=yt.group(0).strip())
+
+    # --- Other supported hosts: TikTok / X / Facebook / Pinterest / Reddit ---
+    gen = _GENERIC_RE.search(text)
+    if gen:
+        return ParsedRequest(ContentType.GENERIC, url=gen.group(0).strip())
 
     url = _extract_url(text)
     if not url:

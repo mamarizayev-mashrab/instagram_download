@@ -8,6 +8,7 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import re
@@ -90,17 +91,33 @@ def _lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _yt_keyboard(vid: str) -> InlineKeyboardMarkup:
+def _fmt_duration(seconds: int | None) -> str:
+    if not seconds:
+        return ""
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _sz(sizes: dict | None, key: str) -> str:
+    """' · ~45 MB' suffix for a quality button, or '' when size is unknown."""
+    if sizes and sizes.get(key):
+        return f" · ~{sizes[key]} MB"
+    return ""
+
+
+def _yt_keyboard(vid: str, sizes: dict | None = None) -> InlineKeyboardMarkup:
     """Quality picker shown for a YouTube link. The video id rides in callback_data
-    so the handler stays stateless (no per-user pending store needed)."""
+    so the handler stays stateless (no per-user pending store needed). When known,
+    each button shows the approximate file size."""
     rows = [
         [
-            InlineKeyboardButton(text="🎬 360p", callback_data=f"yt:360:{vid}"),
-            InlineKeyboardButton(text="🎬 720p", callback_data=f"yt:720:{vid}"),
+            InlineKeyboardButton(text=f"🎬 360p{_sz(sizes, '360')}", callback_data=f"yt:360:{vid}"),
+            InlineKeyboardButton(text=f"🎬 720p{_sz(sizes, '720')}", callback_data=f"yt:720:{vid}"),
         ],
         [
-            InlineKeyboardButton(text="🎬 1080p", callback_data=f"yt:1080:{vid}"),
-            InlineKeyboardButton(text="🎵 MP3", callback_data=f"yt:audio:{vid}"),
+            InlineKeyboardButton(text=f"🎬 1080p{_sz(sizes, '1080')}", callback_data=f"yt:1080:{vid}"),
+            InlineKeyboardButton(text=f"🎵 MP3{_sz(sizes, 'audio')}", callback_data=f"yt:audio:{vid}"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -424,11 +441,45 @@ async def handle_link(message: Message) -> None:
         await message.answer(i18n.t(uid, "unknown"))
         return
 
-    # YouTube → let the user pick a quality (or audio) before we download.
+    # YouTube → probe metadata, then let the user pick a quality (or audio).
     if req.content_type == ContentType.YOUTUBE:
-        await message.answer(
-            i18n.t(uid, "yt_choose"), reply_markup=_yt_keyboard(req.shortcode)
+        vid = req.shortcode
+        probing = await message.answer(i18n.t(uid, "probing"))
+        meta = await ytdlp_downloader.probe_youtube(
+            f"https://www.youtube.com/watch?v={vid}"
         )
+        text = i18n.t(uid, "yt_choose")
+        if meta and meta.get("title"):
+            head = f"🎬 <b>{html.escape(meta['title'])[:120]}</b>"
+            dur = _fmt_duration(meta.get("duration"))
+            if dur:
+                head += f"  ·  ⏱ {dur}"
+            text = f"{head}\n\n{text}"
+        kb = _yt_keyboard(vid, meta.get("sizes") if meta else None)
+        try:
+            await probing.edit_text(text, reply_markup=kb)
+        except Exception:
+            await message.answer(text, reply_markup=kb)
+        return
+
+    # Other public video hosts (TikTok / X / Facebook / …) → direct best-fit.
+    if req.content_type == ContentType.GENERIC:
+        status = await message.answer(i18n.t(uid, "downloading"))
+        try:
+            async with _download_sem:
+                with temp_workdir() as workdir:
+                    files = await ytdlp_downloader.download_generic(
+                        req.url, workdir, MAX_UPLOAD_MB
+                    )
+                    files = collect_media(workdir) or files
+                    await _send_media(message, files, uid)
+            await status.delete()
+        except DownloadError as exc:
+            log.info("Generic download error: %s", exc)
+            await status.edit_text(i18n.t(uid, "download_error", err=exc))
+        except Exception:
+            log.exception("Unexpected generic error")
+            await status.edit_text(i18n.t(uid, "unexpected"))
         return
 
     if _needs_login(req) and insta_client is None:

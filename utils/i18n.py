@@ -10,11 +10,14 @@ import json
 import threading
 from pathlib import Path
 
+from utils.redis_store import client as _redis
+
 DEFAULT_LANG = "uz"
 LANGS = ("uz", "en", "ru", "tr")
 LANG_NAMES = {"uz": "🇺🇿 O'zbekcha", "en": "🇬🇧 English", "ru": "🇷🇺 Русский", "tr": "🇹🇷 Türkçe"}
 
 _STORE_FILE = Path("userlang.json")
+_REDIS_HASH = "igbot:lang"
 _lock = threading.Lock()
 _data: dict[str, str] = {}
 _loaded = False
@@ -24,6 +27,14 @@ def _load() -> None:
     global _data, _loaded
     if _loaded:
         return
+    r = _redis()
+    if r is not None:
+        try:
+            _data = r.hgetall(_REDIS_HASH) or {}
+            _loaded = True
+            return
+        except Exception:
+            pass  # fall back to the file store
     try:
         _data = json.loads(_STORE_FILE.read_text(encoding="utf-8"))
         if not isinstance(_data, dict):
@@ -52,6 +63,13 @@ def set_lang(user_id: int, lang: str) -> None:
     with _lock:
         _load()
         _data[str(user_id)] = lang
+        r = _redis()
+        if r is not None:
+            try:
+                r.hset(_REDIS_HASH, str(user_id), lang)
+                return
+            except Exception:
+                pass  # fall back to the file store
         _save()
 
 
@@ -80,6 +98,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "• Postlar (rasm / video / karusel)\n"
             "• IGTV\n"
             "• YouTube — video (360p / 720p / 1080p) yoki MP3\n"
+            "• TikTok, X (Twitter), Facebook, Pinterest, Reddit\n"
             "• Stories — <code>@username stories</code>\n"
             "• Highlights — <code>@username highlights</code>\n"
             "• HD profil rasmi — <code>@username pfp</code>\n\n"
@@ -103,6 +122,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "u hali sozlanmagan."
         ),
         "downloading": "⏳ Yuklanmoqda...",
+        "probing": "⏳ Video ma'lumoti olinmoqda...",
         "retrying": "⏳ Instagram band — {sec}s dan keyin qayta urinaman...",
         "compressing": "📦 Video katta — Telegram limitiga siqilmoqda...",
         "too_big": "⚠️ {n} ta fayl siqilgandan keyin ham {mb:.0f} MB dan katta — o'tkazib yuborildi.",
@@ -130,6 +150,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "• Posts (photo / video / carousel)\n"
             "• IGTV\n"
             "• YouTube — video (360p / 720p / 1080p) or MP3\n"
+            "• TikTok, X (Twitter), Facebook, Pinterest, Reddit\n"
             "• Stories — <code>@username stories</code>\n"
             "• Highlights — <code>@username highlights</code>\n"
             "• HD profile picture — <code>@username pfp</code>\n\n"
@@ -153,6 +174,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "which isn't configured yet."
         ),
         "downloading": "⏳ Downloading...",
+        "probing": "⏳ Fetching video info...",
         "retrying": "⏳ Instagram is busy — retrying in {sec}s...",
         "compressing": "📦 Video is large — compressing to fit Telegram's limit...",
         "too_big": "⚠️ Skipped {n} file(s) still over {mb:.0f} MB after compression.",
@@ -180,6 +202,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "• Посты (фото / видео / карусель)\n"
             "• IGTV\n"
             "• YouTube — видео (360p / 720p / 1080p) или MP3\n"
+            "• TikTok, X (Twitter), Facebook, Pinterest, Reddit\n"
             "• Истории — <code>@username stories</code>\n"
             "• Highlights — <code>@username highlights</code>\n"
             "• Фото профиля HD — <code>@username pfp</code>\n\n"
@@ -203,6 +226,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "который ещё не настроен."
         ),
         "downloading": "⏳ Загрузка...",
+        "probing": "⏳ Получаю информацию о видео...",
         "retrying": "⏳ Instagram занят — повтор через {sec}с...",
         "compressing": "📦 Видео большое — сжимаю под лимит Telegram...",
         "too_big": "⚠️ Пропущено файлов: {n} — больше {mb:.0f} МБ даже после сжатия.",
@@ -230,6 +254,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "• Gönderiler (fotoğraf / video / karusel)\n"
             "• IGTV\n"
             "• YouTube — video (360p / 720p / 1080p) veya MP3\n"
+            "• TikTok, X (Twitter), Facebook, Pinterest, Reddit\n"
             "• Hikayeler — <code>@username stories</code>\n"
             "• Öne çıkanlar — <code>@username highlights</code>\n"
             "• HD profil fotoğrafı — <code>@username pfp</code>\n\n"
@@ -253,6 +278,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "henüz yapılandırılmadı."
         ),
         "downloading": "⏳ İndiriliyor...",
+        "probing": "⏳ Video bilgileri alınıyor...",
         "retrying": "⏳ Instagram meşgul — {sec}s sonra tekrar denenecek...",
         "compressing": "📦 Video büyük — Telegram limitine sığdırmak için sıkıştırılıyor...",
         "too_big": "⚠️ {n} dosya sıkıştırmadan sonra bile {mb:.0f} MB üstünde — atlandı.",

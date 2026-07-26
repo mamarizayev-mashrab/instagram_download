@@ -4,3 +4,4 @@ yt-dlp-ejs==0.8.0
 instaloader==4.15.2
 aiohttp==3.14.3
 python-dotenv==1.2.2
+redis>=5.0,<6.0

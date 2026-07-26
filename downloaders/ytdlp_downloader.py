@@ -13,7 +13,7 @@ from pathlib import Path
 
 from yt_dlp import YoutubeDL
 
-from utils.files import collect_media
+from utils.files import collect_media, temp_workdir
 
 log = logging.getLogger("igbot.ytdlp")
 
@@ -200,3 +200,142 @@ async def download_youtube(
         raise
     except Exception as exc:
         raise DownloadError(f"YouTube download failed: {exc}") from exc
+
+
+# ---- metadata probe (for the quality picker: title + per-quality sizes) -------
+
+def _fmt_size(f: dict) -> int:
+    return int(f.get("filesize") or f.get("filesize_approx") or 0)
+
+
+def _estimate_sizes(info: dict, duration: int) -> dict:
+    """Rough MB estimate for each quality button, from yt-dlp's format list."""
+    formats = info.get("formats") or []
+
+    # Only formats with a KNOWN size are usable for an estimate (some HLS/premium
+    # renditions report no filesize).
+    audio_only = [
+        f for f in formats
+        if f.get("acodec") not in (None, "none")
+        and f.get("vcodec") in (None, "none")
+        and _fmt_size(f) > 0
+    ]
+    best_audio = max(audio_only, key=lambda f: (f.get("abr") or 0), default=None)
+    audio_sz = _fmt_size(best_audio) if best_audio else 0
+
+    sizes: dict[str, int | None] = {}
+    for label, h in (("360", 360), ("720", 720), ("1080", 1080)):
+        vids = [
+            f for f in formats
+            if f.get("vcodec") not in (None, "none")
+            and 0 < (f.get("height") or 0) <= h
+            and _fmt_size(f) > 0
+        ]
+        total = 0
+        if vids:
+            best_v = max(vids, key=lambda f: ((f.get("height") or 0), (f.get("tbr") or 0)))
+            total = _fmt_size(best_v) + audio_sz
+        if not total:
+            # progressive muxed stream fallback
+            prog = [
+                f for f in formats
+                if f.get("vcodec") not in (None, "none")
+                and f.get("acodec") not in (None, "none")
+                and 0 < (f.get("height") or 0) <= h
+                and _fmt_size(f) > 0
+            ]
+            if prog:
+                total = _fmt_size(max(prog, key=lambda f: (f.get("height") or 0)))
+        sizes[label] = round(total / 1048576) if total else None
+
+    # MP3 at 192 kbps ≈ duration-based; fall back to source audio size.
+    if duration:
+        sizes["audio"] = round(192 * duration / 8 / 1024)
+    elif audio_sz:
+        sizes["audio"] = round(audio_sz / 1048576)
+    else:
+        sizes["audio"] = None
+    return sizes
+
+
+def _blocking_probe_youtube(url: str) -> dict:
+    ffmpeg = _ffmpeg_location()
+    with temp_workdir("ytprobe_") as wd:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+            "socket_timeout": 30,
+            "nocheckcertificate": True,
+        }
+        if ffmpeg:
+            ydl_opts["ffmpeg_location"] = ffmpeg
+        _apply_youtube_auth(ydl_opts, wd)
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    duration = int(info.get("duration") or 0)
+    return {
+        "title": info.get("title") or "",
+        "duration": duration,
+        "sizes": _estimate_sizes(info, duration),
+    }
+
+
+async def probe_youtube(url: str) -> dict | None:
+    """Fetch title/duration/per-quality sizes for the picker. None on failure."""
+    try:
+        return await asyncio.to_thread(_blocking_probe_youtube, url)
+    except Exception as exc:
+        log.info("YouTube probe failed: %s", exc)
+        return None
+
+
+# ---- generic hosts (TikTok / X / Facebook / …) -------------------------------
+
+def _blocking_download_generic(url: str, workdir: Path, max_mb: float) -> list[Path]:
+    outtmpl = str(workdir / "%(id)s.%(ext)s")
+    ffmpeg = _ffmpeg_location()
+    budget = max(10, int(max_mb * 0.96))
+    vbudget = max(8, budget - 10)
+
+    ydl_opts = {
+        "outtmpl": outtmpl,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "retries": 3,
+        "socket_timeout": 30,
+        "nocheckcertificate": True,
+    }
+    if ffmpeg:
+        ydl_opts["ffmpeg_location"] = ffmpeg
+        ydl_opts["merge_output_format"] = "mp4"
+        ydl_opts["format"] = (
+            f"best[filesize_approx<{budget}M]/"
+            f"bestvideo[filesize_approx<{vbudget}M]+bestaudio/"
+            f"best"
+        )
+    else:
+        ydl_opts["format"] = (
+            f"best[filesize_approx<{budget}M][acodec!=none][vcodec!=none]/best"
+        )
+
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    files = collect_media(workdir)
+    if not files:
+        raise DownloadError("yt-dlp produced no media files.")
+    return files
+
+
+async def download_generic(url: str, workdir: Path, max_mb: float = 50.0) -> list[Path]:
+    """Download a video from any yt-dlp-supported host (TikTok/X/Facebook/…),
+    picking the best rendition that fits the upload limit."""
+    try:
+        return await asyncio.to_thread(_blocking_download_generic, url, workdir, max_mb)
+    except DownloadError:
+        raise
+    except Exception as exc:
+        raise DownloadError(f"Download failed: {exc}") from exc

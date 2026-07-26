@@ -11,7 +11,10 @@ import json
 import threading
 from pathlib import Path
 
+from utils.redis_store import client as _redis
+
 _CACHE_FILE = Path("cache.json")
+_REDIS_HASH = "igbot:cache"
 _lock = threading.Lock()
 _data: dict[str, list[dict]] = {}
 _loaded = False
@@ -38,7 +41,14 @@ def _save() -> None:
 
 
 def get(key: str) -> list[dict] | None:
-    """Return cached [{'kind': 'video'|'photo', 'file_id': ...}, ...] or None."""
+    """Return cached [{'kind': 'video'|'photo'|'audio', 'file_id': ...}, ...] or None."""
+    r = _redis()
+    if r is not None:
+        try:
+            raw = r.hget(_REDIS_HASH, key)
+            return json.loads(raw) if raw else None
+        except Exception:
+            pass  # fall through to the file store
     with _lock:
         _load()
         entry = _data.get(key)
@@ -48,6 +58,13 @@ def get(key: str) -> list[dict] | None:
 def put(key: str, items: list[dict]) -> None:
     if not key or not items:
         return
+    r = _redis()
+    if r is not None:
+        try:
+            r.hset(_REDIS_HASH, key, json.dumps(items, ensure_ascii=False))
+            return
+        except Exception:
+            pass  # fall through to the file store
     with _lock:
         _load()
         _data[key] = items
