@@ -112,9 +112,10 @@ async def cmd_help(message: Message) -> None:
 
 @dp.message(Command("language", "lang"))
 async def cmd_language(message: Message) -> None:
-    await message.answer(
-        i18n.t(message.from_user.id, "lang_choose"), reply_markup=_lang_keyboard()
-    )
+    uid = message.from_user.id
+    # Show the welcome blurb first, then the language picker.
+    await message.answer(i18n.t(uid, "welcome"))
+    await message.answer(i18n.t(uid, "lang_choose"), reply_markup=_lang_keyboard())
 
 
 @dp.callback_query(F.data.startswith("setlang:"))
