@@ -15,6 +15,7 @@ class ContentType(str, Enum):
     HIGHLIGHT = "highlight"  # login → instaloader
     PROFILE_PIC = "profile_pic"  # login → instaloader
     USER_STORIES = "user_stories"  # login → instaloader
+    YOUTUBE = "youtube"    # public → yt-dlp, user picks quality/audio
     UNKNOWN = "unknown"
 
 
@@ -28,6 +29,15 @@ class ParsedRequest:
 
 
 _URL_RE = re.compile(r"https?://(?:www\.)?instagram\.com/\S+", re.IGNORECASE)
+_YOUTUBE_RE = re.compile(
+    r"https?://(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)/\S+", re.IGNORECASE
+)
+# Pulls the 11-char video id out of any common YouTube URL shape.
+_YT_ID_RE = re.compile(
+    r"(?:youtu\.be/|youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/|v/))"
+    r"([A-Za-z0-9_-]{11})",
+    re.IGNORECASE,
+)
 _SHORTCODE_RE = re.compile(r"instagram\.com/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)", re.IGNORECASE)
 _STORIES_RE = re.compile(r"instagram\.com/stories/([A-Za-z0-9_.]+)", re.IGNORECASE)
 _HIGHLIGHT_RE = re.compile(r"instagram\.com/stories/highlights/(\d+)", re.IGNORECASE)
@@ -63,6 +73,17 @@ def parse(text: str) -> ParsedRequest:
         if kind.startswith("highlight"):
             return ParsedRequest(ContentType.HIGHLIGHT, username=username)
         return ParsedRequest(ContentType.USER_STORIES, username=username)
+
+    # --- YouTube links: watch / youtu.be / shorts / live ---
+    yt = _YOUTUBE_RE.search(text)
+    if yt:
+        vid = _YT_ID_RE.search(text)
+        if vid:
+            return ParsedRequest(
+                ContentType.YOUTUBE, url=yt.group(0).strip(), shortcode=vid.group(1)
+            )
+        # A YouTube link with no recognizable video id (channel/playlist/etc.).
+        return ParsedRequest(ContentType.UNKNOWN, url=yt.group(0).strip())
 
     url = _extract_url(text)
     if not url:

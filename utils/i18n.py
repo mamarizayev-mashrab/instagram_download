@@ -73,12 +73,13 @@ TEXTS: dict[str, dict[str, str]] = {
     # ---------------------------------------------------------------- Uzbek
     "uz": {
         "welcome": (
-            "👋 <b>Instagram Yuklovchi Bot</b>\n\n"
-            "Menga Instagram havolasini yuboring — men mediani yuklab beraman.\n\n"
+            "👋 <b>Instagram & YouTube Yuklovchi Bot</b>\n\n"
+            "Menga Instagram yoki YouTube havolasini yuboring — men mediani yuklab beraman.\n\n"
             "<b>Qo'llab-quvvatlanadi:</b>\n"
             "• Reels va videolar\n"
             "• Postlar (rasm / video / karusel)\n"
             "• IGTV\n"
+            "• YouTube — video (360p / 720p / 1080p) yoki MP3\n"
             "• Stories — <code>@username stories</code>\n"
             "• Highlights — <code>@username highlights</code>\n"
             "• HD profil rasmi — <code>@username pfp</code>\n\n"
@@ -115,18 +116,20 @@ TEXTS: dict[str, dict[str, str]] = {
             "Highlight havolasida username yo'q. "
             "<code>@username highlights</code> deb yuboring."
         ),
+        "yt_choose": "🎬 YouTube — sifatni yoki formatni tanlang:",
         "lang_choose": "🌐 Tilni tanlang:",
         "lang_set": "✅ Til o'zbekchaga o'zgartirildi.",
     },
     # ---------------------------------------------------------------- English
     "en": {
         "welcome": (
-            "👋 <b>Instagram Downloader Bot</b>\n\n"
-            "Send me an Instagram link and I'll fetch the media for you.\n\n"
+            "👋 <b>Instagram & YouTube Downloader Bot</b>\n\n"
+            "Send me an Instagram or YouTube link and I'll fetch the media for you.\n\n"
             "<b>Supported:</b>\n"
             "• Reels & videos\n"
             "• Posts (photo / video / carousel)\n"
             "• IGTV\n"
+            "• YouTube — video (360p / 720p / 1080p) or MP3\n"
             "• Stories — <code>@username stories</code>\n"
             "• Highlights — <code>@username highlights</code>\n"
             "• HD profile picture — <code>@username pfp</code>\n\n"
@@ -163,18 +166,20 @@ TEXTS: dict[str, dict[str, str]] = {
             "Highlight links don't include the username. "
             "Send <code>@username highlights</code> instead."
         ),
+        "yt_choose": "🎬 YouTube — choose quality or format:",
         "lang_choose": "🌐 Choose your language:",
         "lang_set": "✅ Language changed to English.",
     },
     # ---------------------------------------------------------------- Russian
     "ru": {
         "welcome": (
-            "👋 <b>Бот для скачивания из Instagram</b>\n\n"
-            "Отправьте ссылку Instagram — я скачаю медиа.\n\n"
+            "👋 <b>Бот для скачивания из Instagram и YouTube</b>\n\n"
+            "Отправьте ссылку Instagram или YouTube — я скачаю медиа.\n\n"
             "<b>Поддерживается:</b>\n"
             "• Reels и видео\n"
             "• Посты (фото / видео / карусель)\n"
             "• IGTV\n"
+            "• YouTube — видео (360p / 720p / 1080p) или MP3\n"
             "• Истории — <code>@username stories</code>\n"
             "• Highlights — <code>@username highlights</code>\n"
             "• Фото профиля HD — <code>@username pfp</code>\n\n"
@@ -211,18 +216,20 @@ TEXTS: dict[str, dict[str, str]] = {
             "В ссылке на highlight нет имени пользователя. "
             "Отправьте <code>@username highlights</code>."
         ),
+        "yt_choose": "🎬 YouTube — выберите качество или формат:",
         "lang_choose": "🌐 Выберите язык:",
         "lang_set": "✅ Язык изменён на русский.",
     },
     # ---------------------------------------------------------------- Turkish
     "tr": {
         "welcome": (
-            "👋 <b>Instagram İndirme Botu</b>\n\n"
-            "Bana bir Instagram bağlantısı gönder, medyayı indireyim.\n\n"
+            "👋 <b>Instagram & YouTube İndirme Botu</b>\n\n"
+            "Bana bir Instagram veya YouTube bağlantısı gönder, medyayı indireyim.\n\n"
             "<b>Desteklenenler:</b>\n"
             "• Reels ve videolar\n"
             "• Gönderiler (fotoğraf / video / karusel)\n"
             "• IGTV\n"
+            "• YouTube — video (360p / 720p / 1080p) veya MP3\n"
             "• Hikayeler — <code>@username stories</code>\n"
             "• Öne çıkanlar — <code>@username highlights</code>\n"
             "• HD profil fotoğrafı — <code>@username pfp</code>\n\n"
@@ -259,6 +266,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "Highlight bağlantısında kullanıcı adı yok. "
             "<code>@username highlights</code> gönder."
         ),
+        "yt_choose": "🎬 YouTube — kalite veya format seç:",
         "lang_choose": "🌐 Dilini seç:",
         "lang_set": "✅ Dil Türkçe olarak değiştirildi.",
     },

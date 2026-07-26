@@ -73,6 +73,22 @@ def _lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _yt_keyboard(vid: str) -> InlineKeyboardMarkup:
+    """Quality picker shown for a YouTube link. The video id rides in callback_data
+    so the handler stays stateless (no per-user pending store needed)."""
+    rows = [
+        [
+            InlineKeyboardButton(text="🎬 360p", callback_data=f"yt:360:{vid}"),
+            InlineKeyboardButton(text="🎬 720p", callback_data=f"yt:720:{vid}"),
+        ],
+        [
+            InlineKeyboardButton(text="🎬 1080p", callback_data=f"yt:1080:{vid}"),
+            InlineKeyboardButton(text="🎵 MP3", callback_data=f"yt:audio:{vid}"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     uid = message.from_user.id
@@ -105,6 +121,51 @@ async def on_set_language(call: CallbackQuery) -> None:
     except Exception:
         await call.message.answer(i18n.t(call.from_user.id, "lang_set"))
     await call.message.answer(i18n.t(call.from_user.id, "welcome"))
+
+
+@dp.callback_query(F.data.startswith("yt:"))
+async def on_youtube_quality(call: CallbackQuery) -> None:
+    """Download the YouTube video/audio at the quality the user tapped."""
+    uid = call.from_user.id
+    try:
+        _, quality, vid = call.data.split(":", 2)
+    except ValueError:
+        await call.answer()
+        return
+
+    url = f"https://www.youtube.com/watch?v={vid}"
+    await call.answer()
+    # Collapse the picker so it can't be tapped twice.
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Instant resend if we've already produced this exact video/quality before.
+    key = f"youtube:{vid}:{quality}"
+    cached = cache.get(key)
+    if cached and await _send_from_cache(call.message, cached):
+        log.info("Cache hit for %s", key)
+        return
+
+    status = await call.message.answer(i18n.t(uid, "downloading"))
+    try:
+        with temp_workdir() as workdir:
+            files = await ytdlp_downloader.download_youtube(url, workdir, quality)
+            files = collect_media(workdir) or files
+            if quality == "audio":
+                sent = await _send_audio(call.message, files, uid)
+            else:
+                sent = await _send_media(call.message, files, uid)
+            if sent:
+                cache.put(key, sent)
+        await status.delete()
+    except DownloadError as exc:
+        log.info("YouTube download error: %s", exc)
+        await status.edit_text(i18n.t(uid, "download_error", err=exc))
+    except Exception:
+        log.exception("Unexpected YouTube error")
+        await status.edit_text(i18n.t(uid, "unexpected"))
 
 
 def _needs_login(req: ParsedRequest) -> bool:
@@ -201,13 +262,13 @@ async def _dispatch_download(req: ParsedRequest, workdir) -> list:
     raise InstaDownloadError("Unsupported content type.")
 
 
-async def _fit_limit(message: Message, path):
+async def _fit_limit(message: Message, path, uid: int):
     """Return a path that fits under the limit, compressing an oversized video if needed."""
     if size_mb(path) <= MAX_UPLOAD_MB:
         return path
     if not is_video(path):
         return None  # can't shrink a photo meaningfully
-    await message.answer(i18n.t(message.from_user.id, "compressing"))
+    await message.answer(i18n.t(uid, "compressing"))
     smaller = await asyncio.to_thread(compress_video, path, MAX_UPLOAD_MB, FFMPEG_LOCATION)
     if smaller and size_mb(smaller) <= MAX_UPLOAD_MB:
         return smaller
@@ -228,19 +289,38 @@ def _video_kwargs(path):
     return kwargs
 
 
-async def _send_media(message: Message, files: list) -> list[dict]:
+async def _send_audio(message: Message, files: list, uid: int) -> list[dict]:
+    """Send audio files, returning [{'kind':'audio','file_id'}] for caching."""
+    sent_ids: list[dict] = []
+    too_big = 0
+    for f in files:
+        if size_mb(f) > MAX_UPLOAD_MB:
+            too_big += 1
+            continue
+        msg = await message.answer_audio(FSInputFile(f))
+        if msg.audio:
+            sent_ids.append({"kind": "audio", "file_id": msg.audio.file_id})
+    if not sent_ids:
+        await message.answer(i18n.t(uid, "too_large", mb=MAX_UPLOAD_MB))
+        return []
+    if too_big:
+        await message.answer(i18n.t(uid, "too_big", n=too_big, mb=MAX_UPLOAD_MB))
+    return sent_ids
+
+
+async def _send_media(message: Message, files: list, uid: int) -> list[dict]:
     """Send media, return [{'kind','file_id'}] for caching. Compress oversized videos."""
     sendable = []
     too_big = 0
     for f in files:
-        fitted = await _fit_limit(message, f)
+        fitted = await _fit_limit(message, f, uid)
         if fitted is not None:
             sendable.append(fitted)
         else:
             too_big += 1
 
     if not sendable:
-        await message.answer(i18n.t(message.from_user.id, "too_large", mb=MAX_UPLOAD_MB))
+        await message.answer(i18n.t(uid, "too_large", mb=MAX_UPLOAD_MB))
         return []
 
     sent_ids: list[dict] = []
@@ -276,9 +356,7 @@ async def _send_media(message: Message, files: list) -> list[dict]:
                     sent_ids.append({"kind": "photo", "file_id": m.photo[-1].file_id})
 
     if too_big:
-        await message.answer(
-            i18n.t(message.from_user.id, "too_big", n=too_big, mb=MAX_UPLOAD_MB)
-        )
+        await message.answer(i18n.t(uid, "too_big", n=too_big, mb=MAX_UPLOAD_MB))
     return sent_ids
 
 
@@ -289,6 +367,8 @@ async def _send_from_cache(message: Message, items: list[dict]) -> bool:
             it = items[0]
             if it["kind"] == "video":
                 await message.answer_video(it["file_id"])
+            elif it["kind"] == "audio":
+                await message.answer_audio(it["file_id"])
             else:
                 await message.answer_photo(it["file_id"])
         else:
@@ -314,6 +394,13 @@ async def handle_link(message: Message) -> None:
         await message.answer(i18n.t(uid, "unknown"))
         return
 
+    # YouTube → let the user pick a quality (or audio) before we download.
+    if req.content_type == ContentType.YOUTUBE:
+        await message.answer(
+            i18n.t(uid, "yt_choose"), reply_markup=_yt_keyboard(req.shortcode)
+        )
+        return
+
     if _needs_login(req) and insta_client is None:
         await message.answer(i18n.t(uid, "needs_login"))
         return
@@ -331,7 +418,7 @@ async def handle_link(message: Message) -> None:
         with temp_workdir() as workdir:
             files = await _dispatch_with_retry(req, workdir, status, uid)
             files = collect_media(workdir) or files
-            sent = await _send_media(message, files)
+            sent = await _send_media(message, files, uid)
             if key and sent:
                 cache.put(key, sent)  # remember for instant future resends
         await status.delete()

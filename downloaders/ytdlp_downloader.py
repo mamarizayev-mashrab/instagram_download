@@ -70,3 +70,75 @@ async def download(url: str, workdir: Path) -> list[Path]:
         raise
     except Exception as exc:  # yt_dlp raises many concrete types
         raise DownloadError(f"Public download failed: {exc}") from exc
+
+
+# Quality label → max video height. "audio" is handled separately.
+_YT_HEIGHTS = {"360": 360, "720": 720, "1080": 1080}
+
+
+def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Path]:
+    outtmpl = str(workdir / "%(id)s.%(ext)s")
+    ffmpeg = _ffmpeg_location()
+
+    ydl_opts = {
+        "outtmpl": outtmpl,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,     # a single video even if the link carries a playlist
+        "retries": 3,
+        "socket_timeout": 30,
+        "nocheckcertificate": True,
+    }
+    if ffmpeg:
+        ydl_opts["ffmpeg_location"] = ffmpeg
+
+    if quality == "audio":
+        if ffmpeg:
+            # Grab best audio and transcode to a universally-playable MP3.
+            ydl_opts["format"] = "bestaudio/best"
+            ydl_opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ]
+        else:
+            # No ffmpeg → hand back a single audio stream as-is (m4a preferred).
+            ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
+    else:
+        height = _YT_HEIGHTS.get(quality, 720)
+        if ffmpeg:
+            # Merge best video+audio up to the requested height into mp4.
+            ydl_opts["format"] = (
+                f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
+                f"best[height<={height}][ext=mp4]/best[height<={height}]/best"
+            )
+            ydl_opts["merge_output_format"] = "mp4"
+        else:
+            # No ffmpeg → a single progressive stream that already has audio+video.
+            ydl_opts["format"] = (
+                f"best[height<={height}][ext=mp4][acodec!=none][vcodec!=none]/"
+                f"best[height<={height}][acodec!=none][vcodec!=none]/best"
+            )
+
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    files = collect_media(workdir)
+    if not files:
+        raise DownloadError("yt-dlp produced no media files.")
+    return files
+
+
+async def download_youtube(url: str, workdir: Path, quality: str = "720") -> list[Path]:
+    """Download a YouTube video at a given quality, or its audio as MP3.
+
+    `quality` is one of "360", "720", "1080" (video) or "audio" (MP3/m4a).
+    """
+    try:
+        return await asyncio.to_thread(_blocking_download_youtube, url, workdir, quality)
+    except DownloadError:
+        raise
+    except Exception as exc:
+        raise DownloadError(f"YouTube download failed: {exc}") from exc

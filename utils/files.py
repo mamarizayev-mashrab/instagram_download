@@ -13,6 +13,7 @@ from typing import Iterator
 # Media extensions we care about, split by kind.
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+AUDIO_EXTS = {".mp3", ".m4a", ".opus", ".aac", ".ogg", ".wav"}
 
 
 @contextmanager
@@ -27,11 +28,11 @@ def temp_workdir(prefix: str = "igbot_") -> Iterator[Path]:
 
 
 def collect_media(folder: Path) -> list[Path]:
-    """Return media files in a folder, videos first, sorted by name (carousel order)."""
+    """Return media files in a folder, sorted by name (carousel order)."""
     files = [
         p
         for p in sorted(folder.rglob("*"))
-        if p.is_file() and p.suffix.lower() in (VIDEO_EXTS | IMAGE_EXTS)
+        if p.is_file() and p.suffix.lower() in (VIDEO_EXTS | IMAGE_EXTS | AUDIO_EXTS)
     ]
     return files
 
@@ -42,6 +43,10 @@ def is_video(path: Path) -> bool:
 
 def is_image(path: Path) -> bool:
     return path.suffix.lower() in IMAGE_EXTS
+
+
+def is_audio(path: Path) -> bool:
+    return path.suffix.lower() in AUDIO_EXTS
 
 
 def size_mb(path: Path) -> float:
