@@ -257,15 +257,18 @@ def _looks_like_auth_issue(exc: Exception) -> bool:
 
 
 def _make_progress(state: dict):
-    """Build a yt-dlp progress hook that records percent/stage into `state`.
+    """Build a yt-dlp progress hook that records progress into `state`.
     Runs in the download worker thread; only does cheap dict writes."""
     def hook(d: dict) -> None:
         st = d.get("status")
         if st == "downloading":
-            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            state["started"] = True
             done = d.get("downloaded_bytes") or 0
+            state["mb"] = done / 1048576
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
             if total:
                 state["pct"] = max(state.get("pct", 0), int(done / total * 100))
+                state["has_total"] = True
         elif st == "finished":
             state["stage"] = "merge"
     return hook
@@ -273,18 +276,24 @@ def _make_progress(state: dict):
 
 async def _download_with_progress(factory, status: Message, uid: int) -> list:
     """Run a download coroutine (built by `factory(hook)`) while live-editing
-    `status` with the current percentage every few seconds."""
-    state: dict = {"pct": 0, "stage": "download"}
+    `status` with the current progress every couple of seconds."""
+    state: dict = {"pct": 0, "mb": 0.0, "stage": "download", "started": False,
+                   "has_total": False}
     task = asyncio.create_task(factory(_make_progress(state)))
     last = ""
     while not task.done():
-        done, _ = await asyncio.wait({task}, timeout=3)
+        done, _ = await asyncio.wait({task}, timeout=2)
         if done:
             break
         if state["stage"] == "merge":
             txt = i18n.t(uid, "merging")
-        else:
+        elif not state["started"]:
+            # Extraction phase (solving YouTube's JS challenge) — no bytes yet.
+            txt = i18n.t(uid, "preparing")
+        elif state["has_total"]:
             txt = i18n.t(uid, "downloading_pct", pct=state["pct"])
+        else:
+            txt = i18n.t(uid, "downloading_mb", mb=round(state["mb"], 1))
         if txt != last:
             try:
                 await status.edit_text(txt)
