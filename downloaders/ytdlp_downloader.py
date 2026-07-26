@@ -148,9 +148,14 @@ def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Pa
         height = _YT_HEIGHTS.get(quality, 720)
         if ffmpeg:
             # Merge best video+audio up to the requested height into mp4.
+            # Prefer a clean mp4+m4a pair, then any video+audio (webm/vp9 gets
+            # remuxed to mp4), then a progressive stream, then anything at all.
+            # The general "+bestaudio" and final "best" fallbacks guarantee a
+            # match even when no mp4 exists at the requested height.
             ydl_opts["format"] = (
                 f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
-                f"best[height<={height}][ext=mp4]/best[height<={height}]/best"
+                f"bestvideo[height<={height}]+bestaudio/"
+                f"best[height<={height}]/best"
             )
             ydl_opts["merge_output_format"] = "mp4"
         else:
