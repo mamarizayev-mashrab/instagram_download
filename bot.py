@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+import secrets
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -51,11 +53,19 @@ FFMPEG_LOCATION = os.getenv("FFMPEG_LOCATION", "").strip() or None
 
 # Point the bot at a self-hosted Telegram Bot API server to lift the upload
 # limit from 50 MB (public api.telegram.org) up to 2 GB. Leave unset to use
-# Telegram's public API. See start.sh / README for how to run the server.
+# Telegram's public API. See docker-compose.yml / README for how to run one.
 TELEGRAM_API_URL = os.getenv("TELEGRAM_API_URL", "").strip()
 # When a local server is configured the ceiling is 2 GB; otherwise 50 MB.
 _default_limit = "2000" if TELEGRAM_API_URL else "50"
 MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", _default_limit))
+
+# Cap concurrent downloads so a burst of requests can't exhaust the (small)
+# free-tier RAM/CPU with parallel yt-dlp + ffmpeg + Deno work.
+MAX_CONCURRENT_DOWNLOADS = max(1, int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2")))
+_download_sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+# A valid YouTube video id (used to sanity-check callback data before building a URL).
+_YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 if not BOT_TOKEN:
     raise SystemExit("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
@@ -141,6 +151,11 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
         await call.answer()
         return
 
+    # Guard: only ever build a URL from a well-formed video id.
+    if quality not in ("360", "720", "1080", "audio") or not _YT_ID.match(vid):
+        await call.answer()
+        return
+
     url = f"https://www.youtube.com/watch?v={vid}"
     await call.answer()
     # Collapse the picker so it can't be tapped twice.
@@ -158,17 +173,18 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
 
     status = await call.message.answer(i18n.t(uid, "downloading"))
     try:
-        with temp_workdir() as workdir:
-            files = await ytdlp_downloader.download_youtube(
-                url, workdir, quality, MAX_UPLOAD_MB
-            )
-            files = collect_media(workdir) or files
-            if quality == "audio":
-                sent = await _send_audio(call.message, files, uid)
-            else:
-                sent = await _send_media(call.message, files, uid)
-            if sent:
-                cache.put(key, sent)
+        async with _download_sem:
+            with temp_workdir() as workdir:
+                files = await ytdlp_downloader.download_youtube(
+                    url, workdir, quality, MAX_UPLOAD_MB
+                )
+                files = collect_media(workdir) or files
+                if quality == "audio":
+                    sent = await _send_audio(call.message, files, uid)
+                else:
+                    sent = await _send_media(call.message, files, uid)
+                if sent:
+                    cache.put(key, sent)
         await status.delete()
     except DownloadError as exc:
         log.info("YouTube download error: %s", exc)
@@ -386,9 +402,13 @@ async def _send_from_cache(message: Message, items: list[dict]) -> bool:
             for it in items:
                 if it["kind"] == "video":
                     media.append(InputMediaVideo(media=it["file_id"]))
-                else:
+                elif it["kind"] == "photo":
                     media.append(InputMediaPhoto(media=it["file_id"]))
-            await message.answer_media_group(media)
+                else:
+                    # Audio can't share a photo/video media group — resend on its own.
+                    await message.answer_audio(it["file_id"])
+            if media:
+                await message.answer_media_group(media)
         return True
     except Exception as exc:  # stale file_id → fall back to a fresh download
         log.info("Cache resend failed (%s); will re-download.", exc)
@@ -425,12 +445,13 @@ async def handle_link(message: Message) -> None:
 
     status = await message.answer(i18n.t(uid, "downloading"))
     try:
-        with temp_workdir() as workdir:
-            files = await _dispatch_with_retry(req, workdir, status, uid)
-            files = collect_media(workdir) or files
-            sent = await _send_media(message, files, uid)
-            if key and sent:
-                cache.put(key, sent)  # remember for instant future resends
+        async with _download_sem:
+            with temp_workdir() as workdir:
+                files = await _dispatch_with_retry(req, workdir, status, uid)
+                files = collect_media(workdir) or files
+                sent = await _send_media(message, files, uid)
+                if key and sent:
+                    cache.put(key, sent)  # remember for instant future resends
         await status.delete()
     except (InstaAuthError,) as exc:
         log.warning("Auth error: %s", exc)
@@ -493,7 +514,9 @@ def main_webhook() -> None:
     base_url = os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL", "")
     base_url = base_url.rstrip("/")
     port = int(os.getenv("PORT", "10000"))
-    secret = os.getenv("WEBHOOK_SECRET", "").strip() or "igbot-secret"
+    # A guessable default would let anyone POST fake updates; generate a strong
+    # random secret when none is configured (stable for the life of the process).
+    secret = os.getenv("WEBHOOK_SECRET", "").strip() or secrets.token_urlsafe(24)
     path = f"/webhook/{secret}"
     # With a local Bot API server the server itself delivers updates to the
     # webhook, so point it at our in-container app instead of the public edge.

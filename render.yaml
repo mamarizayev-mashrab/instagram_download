@@ -2,7 +2,7 @@
 # but this file documents the setup and enables one-click Blueprint deploys.
 services:
   - type: web
-    name: instagram-downloader-bot
+    name: instagram-download-bot
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
@@ -16,6 +16,12 @@ services:
       - key: IG_SESSIONID
         sync: false        # secret; from a burner account's browser session
       - key: WEBHOOK_SECRET
-        sync: false
+        sync: false        # optional; a strong random value is generated if unset
       - key: MAX_UPLOAD_MB
-        value: "50"
+        value: "50"        # free tier can't upload past Telegram's 50 MB anyway
+      - key: MAX_CONCURRENT_DOWNLOADS
+        value: "2"
+      # YouTube bot-check bypass: upload the cookies file as a Secret File named
+      # youtube_cookies.txt (mounted at /etc/secrets/), then set the path below.
+      - key: YOUTUBE_COOKIES_FILE
+        value: "/etc/secrets/youtube_cookies.txt"

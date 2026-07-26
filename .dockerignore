@@ -2,6 +2,8 @@
 .sessions/
 cache.json
 userlang.json
+*cookies*.txt
+*_cookies.txt
 __pycache__/
 *.pyc
 .git/
