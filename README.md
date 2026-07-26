@@ -88,14 +88,41 @@ The bot uses **long polling**, so no public URL / webhook is needed — perfect 
 | `BOT_TOKEN` | ✅ | Telegram bot token from @BotFather |
 | `IG_USERNAME` | for login features | Instagram (burner) username |
 | `IG_PASSWORD` | for login features | Instagram password |
-| `MAX_UPLOAD_MB` | optional | Max upload size, default 50 |
+| `MAX_UPLOAD_MB` | optional | Max upload size (default 50, or 2000 when `TELEGRAM_API_URL` is set) |
 | `SESSION_DIR` | optional | Where the IG session is cached, default `.sessions` |
+| `TELEGRAM_API_URL` | optional | Self-hosted Bot API server URL for 2 GB uploads (e.g. `http://telegram-bot-api:8081`) |
+| `TELEGRAM_API_ID` | for 2 GB | Telegram app id from my.telegram.org (used by the Bot API server) |
+| `TELEGRAM_API_HASH` | for 2 GB | Telegram app hash from my.telegram.org |
 
-## 📈 Raising the 50 MB limit (optional)
+## 📈 Raising the limit to 2 GB (self-hosted Bot API)
 
-Telegram's **Bot API** caps bot uploads at 50 MB. To send larger files, run a
-[local Bot API server](https://github.com/tdlib/telegram-bot-api) and point the bot at it —
-that raises the limit to ~2 GB. This is optional and only needed for very large videos.
+Telegram's public **Bot API** (`api.telegram.org`) caps bot uploads at **50 MB** — that
+number cannot be changed. To send up to **2 GB**, run your **own** copy of the
+[Bot API server](https://github.com/tdlib/telegram-bot-api) and point the bot at it via
+`TELEGRAM_API_URL`. "Local" here means *your own server*, **not your laptop** — run it on an
+always-on host (a small VPS works) so the bot keeps running when your laptop is off. Running
+it on your laptop works too, but then the laptop must stay on 24/7.
+
+The included **`docker-compose.yml`** does the whole thing (bot API server + bot, long-polling):
+
+```bash
+# 1. Get API credentials from https://my.telegram.org  ->  API development tools
+#    (this gives you TELEGRAM_API_ID + TELEGRAM_API_HASH)
+
+# 2. If the bot ever ran on the public API, log it out ONCE so the local server can take over:
+curl "https://api.telegram.org/bot<BOT_TOKEN>/logOut"
+
+# 3. Create a .env with BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH (+ IG_* if used)
+
+# 4. Launch both containers
+docker compose up -d --build
+```
+
+The bot auto-detects `TELEGRAM_API_URL` and bumps `MAX_UPLOAD_MB` to 2000.
+
+> ⚠️ **Render free tier note:** a 2 GB pipeline (download → store → upload) needs real RAM and
+> disk. The free tier (512 MB RAM, small ephemeral disk) reliably handles roughly a few hundred
+> MB, not true 2 GB files. Use a VPS for large files.
 
 ## 📁 Project structure
 

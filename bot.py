@@ -47,8 +47,15 @@ log = logging.getLogger("igbot")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 IG_USERNAME = os.getenv("IG_USERNAME", "").strip()
 IG_PASSWORD = os.getenv("IG_PASSWORD", "").strip()
-MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", "50"))
 FFMPEG_LOCATION = os.getenv("FFMPEG_LOCATION", "").strip() or None
+
+# Point the bot at a self-hosted Telegram Bot API server to lift the upload
+# limit from 50 MB (public api.telegram.org) up to 2 GB. Leave unset to use
+# Telegram's public API. See start.sh / README for how to run the server.
+TELEGRAM_API_URL = os.getenv("TELEGRAM_API_URL", "").strip()
+# When a local server is configured the ceiling is 2 GB; otherwise 50 MB.
+_default_limit = "2000" if TELEGRAM_API_URL else "50"
+MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", _default_limit))
 
 if not BOT_TOKEN:
     raise SystemExit("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
@@ -434,7 +441,16 @@ async def handle_link(message: Message) -> None:
 
 
 def _make_bot() -> Bot:
-    return Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    kwargs = {"default": DefaultBotProperties(parse_mode=ParseMode.HTML)}
+    if TELEGRAM_API_URL:
+        # Route every request through our own Bot API server (2 GB uploads).
+        from aiogram.client.session.aiohttp import AiohttpSession
+        from aiogram.client.telegram import TelegramAPIServer
+
+        server = TelegramAPIServer.from_base(TELEGRAM_API_URL, is_local=True)
+        kwargs["session"] = AiohttpSession(api=server)
+        log.info("Using local Bot API server at %s (2 GB uploads)", TELEGRAM_API_URL)
+    return Bot(BOT_TOKEN, **kwargs)
 
 
 async def main_polling() -> None:
@@ -476,7 +492,10 @@ def main_webhook() -> None:
     port = int(os.getenv("PORT", "10000"))
     secret = os.getenv("WEBHOOK_SECRET", "").strip() or "igbot-secret"
     path = f"/webhook/{secret}"
-    webhook_url = f"{base_url}{path}"
+    # With a local Bot API server the server itself delivers updates to the
+    # webhook, so point it at our in-container app instead of the public edge.
+    webhook_base = f"http://localhost:{port}" if TELEGRAM_API_URL else base_url
+    webhook_url = f"{webhook_base}{path}"
     keepalive_on = os.getenv("KEEPALIVE", "1").strip() not in ("0", "false", "")
     keepalive_secs = int(os.getenv("KEEPALIVE_SECONDS", "300"))
 

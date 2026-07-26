@@ -1,0 +1,39 @@
+# 2 GB upload setup: runs a self-hosted Telegram Bot API server next to the bot.
+# Deploy on any always-on host (a $5 VPS is plenty) — NOT your laptop, so the
+# bot keeps running when your laptop is off:
+#
+#   1. Get TELEGRAM_API_ID + TELEGRAM_API_HASH from https://my.telegram.org
+#   2. If the bot ran on the public API before, log it out ONCE so the local
+#      server can take over:
+#        curl "https://api.telegram.org/bot<BOT_TOKEN>/logOut"
+#   3. Put BOT_TOKEN / TELEGRAM_API_ID / TELEGRAM_API_HASH in a .env file
+#   4. docker compose up -d --build
+#
+# The bot uses long polling here (no webhook/public URL needed).
+
+services:
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_LOCAL: 1          # enable 2 GB local mode
+    volumes:
+      - botapi-data:/var/lib/telegram-bot-api
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - telegram-bot-api
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      TELEGRAM_API_URL: http://telegram-bot-api:8081   # talk to the local server
+      MAX_UPLOAD_MB: "2000"
+      IG_USERNAME: ${IG_USERNAME:-}
+      IG_SESSIONID: ${IG_SESSIONID:-}
+      # No WEBHOOK_URL / RENDER_EXTERNAL_URL -> the bot runs in long-polling mode.
+
+volumes:
+  botapi-data:
