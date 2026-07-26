@@ -113,7 +113,9 @@ def _apply_youtube_auth(ydl_opts: dict, workdir: Path) -> None:
         }
 
 
-def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Path]:
+def _blocking_download_youtube(
+    url: str, workdir: Path, quality: str, max_mb: float
+) -> list[Path]:
     outtmpl = str(workdir / "%(id)s.%(ext)s")
     ffmpeg = _ffmpeg_location()
 
@@ -130,10 +132,15 @@ def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Pa
         ydl_opts["ffmpeg_location"] = ffmpeg
     _apply_youtube_auth(ydl_opts, workdir)
 
+    # Size budget so the result fits Telegram's limit WITHOUT re-encoding — the
+    # free tier is too slow to compress. Reserve a little headroom + audio room.
+    budget = max(10, int(max_mb * 0.96))          # whole-file ceiling (MB)
+    vbudget = max(8, budget - 10)                  # video part, leaving audio room
+
     if quality == "audio":
         if ffmpeg:
             # Grab best audio and transcode to a universally-playable MP3.
-            ydl_opts["format"] = "bestaudio/best"
+            ydl_opts["format"] = f"bestaudio[filesize_approx<{budget}M]/bestaudio/best"
             ydl_opts["postprocessors"] = [
                 {
                     "key": "FFmpegExtractAudio",
@@ -147,12 +154,14 @@ def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Pa
     else:
         height = _YT_HEIGHTS.get(quality, 720)
         if ffmpeg:
-            # Merge best video+audio up to the requested height into mp4.
-            # Prefer a clean mp4+m4a pair, then any video+audio (webm/vp9 gets
-            # remuxed to mp4), then a progressive stream, then anything at all.
-            # The general "+bestaudio" and final "best" fallbacks guarantee a
-            # match even when no mp4 exists at the requested height.
+            # Prefer the best rendition (up to the chosen height) that already
+            # FITS the size budget, so no compression is needed. Only if nothing
+            # is known to fit do we fall back to best-at-height (may need
+            # compression) and finally best.
             ydl_opts["format"] = (
+                f"bestvideo[height<={height}][filesize_approx<{vbudget}M]+bestaudio/"
+                f"best[height<={height}][filesize_approx<{budget}M]/"
+                f"best[filesize_approx<{budget}M]/"
                 f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
                 f"bestvideo[height<={height}]+bestaudio/"
                 f"best[height<={height}]/best"
@@ -174,13 +183,19 @@ def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Pa
     return files
 
 
-async def download_youtube(url: str, workdir: Path, quality: str = "720") -> list[Path]:
+async def download_youtube(
+    url: str, workdir: Path, quality: str = "720", max_mb: float = 50.0
+) -> list[Path]:
     """Download a YouTube video at a given quality, or its audio as MP3.
 
     `quality` is one of "360", "720", "1080" (video) or "audio" (MP3/m4a).
+    `max_mb` biases format selection toward a rendition that fits the upload
+    limit, so no re-encoding is needed.
     """
     try:
-        return await asyncio.to_thread(_blocking_download_youtube, url, workdir, quality)
+        return await asyncio.to_thread(
+            _blocking_download_youtube, url, workdir, quality, max_mb
+        )
     except DownloadError:
         raise
     except Exception as exc:

@@ -159,7 +159,9 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
     status = await call.message.answer(i18n.t(uid, "downloading"))
     try:
         with temp_workdir() as workdir:
-            files = await ytdlp_downloader.download_youtube(url, workdir, quality)
+            files = await ytdlp_downloader.download_youtube(
+                url, workdir, quality, MAX_UPLOAD_MB
+            )
             files = collect_media(workdir) or files
             if quality == "audio":
                 sent = await _send_audio(call.message, files, uid)

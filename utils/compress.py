@@ -73,8 +73,11 @@ def compress_video(
         "-movflags", "+faststart",
         str(dst),
     ]
+    # Cap the re-encode time; on tiny/free CPUs it should fail fast rather than
+    # hang for many minutes. Overridable via COMPRESS_TIMEOUT (seconds).
+    timeout_s = int(os.getenv("COMPRESS_TIMEOUT", "240"))
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired:
         return None
 
