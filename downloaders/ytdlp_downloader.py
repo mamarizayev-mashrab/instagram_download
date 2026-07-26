@@ -79,7 +79,7 @@ async def download(url: str, workdir: Path) -> list[Path]:
 _YT_HEIGHTS = {"360": 360, "720": 720, "1080": 1080}
 
 
-def _apply_youtube_auth(ydl_opts: dict) -> None:
+def _apply_youtube_auth(ydl_opts: dict, workdir: Path) -> None:
     """Help get past YouTube's "confirm you're not a bot" check on datacenter
     IPs (Render, etc.).
 
@@ -90,9 +90,17 @@ def _apply_youtube_auth(ydl_opts: dict) -> None:
     """
     cookiefile = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
     if cookiefile:
-        if Path(cookiefile).exists():
-            ydl_opts["cookiefile"] = cookiefile
-            log.info("YouTube cookies loaded from %s", cookiefile)
+        src = Path(cookiefile)
+        if src.exists():
+            # yt-dlp rewrites the cookie jar after the request. The secret mount
+            # (/etc/secrets) is read-only, so copy to the writable workdir first.
+            dst = workdir / "cookies.txt"
+            try:
+                shutil.copyfile(src, dst)
+                ydl_opts["cookiefile"] = str(dst)
+                log.info("YouTube cookies loaded from %s", cookiefile)
+            except OSError as exc:
+                log.warning("Could not stage cookies file (%s); continuing without", exc)
         else:
             log.warning("YOUTUBE_COOKIES_FILE set but not found: %s", cookiefile)
 
@@ -120,7 +128,7 @@ def _blocking_download_youtube(url: str, workdir: Path, quality: str) -> list[Pa
     }
     if ffmpeg:
         ydl_opts["ffmpeg_location"] = ffmpeg
-    _apply_youtube_auth(ydl_opts)
+    _apply_youtube_auth(ydl_opts, workdir)
 
     if quality == "audio":
         if ffmpeg:
