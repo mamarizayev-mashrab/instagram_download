@@ -6,6 +6,7 @@ Runs the blocking yt-dlp call inside a thread so it never blocks the async event
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -13,6 +14,8 @@ from pathlib import Path
 from yt_dlp import YoutubeDL
 
 from utils.files import collect_media
+
+log = logging.getLogger("igbot.ytdlp")
 
 
 class DownloadError(Exception):
@@ -86,8 +89,12 @@ def _apply_youtube_auth(ydl_opts: dict) -> None:
       (e.g. "android,web_safari,tv"); some clients dodge the bot check.
     """
     cookiefile = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
-    if cookiefile and Path(cookiefile).exists():
-        ydl_opts["cookiefile"] = cookiefile
+    if cookiefile:
+        if Path(cookiefile).exists():
+            ydl_opts["cookiefile"] = cookiefile
+            log.info("YouTube cookies loaded from %s", cookiefile)
+        else:
+            log.warning("YOUTUBE_COOKIES_FILE set but not found: %s", cookiefile)
 
     clients = os.getenv("YOUTUBE_PLAYER_CLIENT", "").strip()
     if clients:

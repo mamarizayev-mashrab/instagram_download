@@ -10,3 +10,6 @@ __pycache__/
 *.png
 .venv/
 venv/
+# YouTube/other cookie exports — secret, never commit
+*cookies*.txt
+*_cookies.txt
