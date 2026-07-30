@@ -18,7 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.enums import ChatType, ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.types import (
@@ -509,7 +509,16 @@ def _err_text(uid: int, exc: Exception) -> str:
 
 def _looks_rate_limited(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return any(s in msg for s in ("wait a few minutes", "429", "rate", "too many", "please wait"))
+    signs = (
+        "wait a few minutes", "429", "rate", "too many", "please wait",
+        # instaloader transient failures on datacenter IPs — Instagram returns a
+        # 401/400/JSON error that surfaces as one of these. A short backoff often
+        # clears it, so treat them as retryable rather than a hard failure.
+        "fetching post metadata failed", "metadata failed",
+        "json query", "bad request", "please wait a few minutes",
+        "checkpoint", "temporarily", "connection",
+    )
+    return any(s in msg for s in signs)
 
 
 async def _dispatch_with_retry(req: ParsedRequest, workdir, status: Message, uid: int) -> list:
@@ -825,16 +834,26 @@ async def on_inline_query(query: InlineQuery) -> None:
     )
 
 
-@dp.message(F.text)
+@dp.message(F.text | F.caption)
 async def handle_link(message: Message) -> None:
-    await _process_link(message, message.text or "")
+    # Also catch links sent as a media caption, not just plain-text messages.
+    await _process_link(message, message.text or message.caption or "")
 
 
 async def _process_link(message: Message, text: str) -> None:
     """Classify `text` and route it to the right downloader. Shared by the text
     handler and the /start deep-link (inline "open bot to download") flow."""
+    if message.from_user is None:
+        return  # channel/anonymous posts carry no user — nothing to attribute
     uid = message.from_user.id
     req = parse(text)
+
+    # In groups the bot must stay quiet unless there's a real, downloadable link:
+    # never reply to ordinary chatter, and ignore bare "@user pfp/stories" keyword
+    # commands (a private-chat convenience) since they'd fire on normal mentions.
+    in_private = message.chat.type == ChatType.PRIVATE
+    if not in_private and (req.content_type == ContentType.UNKNOWN or not req.url):
+        return
 
     if req.content_type == ContentType.UNKNOWN:
         await message.answer(i18n.t(uid, "unknown"))

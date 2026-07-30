@@ -115,6 +115,22 @@ class InstaClient:
                 raise InstaDownloadError("This profile is private and not followed.") from exc
             except instaloader.exceptions.ProfileNotExistsException as exc:
                 raise InstaDownloadError("That Instagram profile does not exist.") from exc
+            except instaloader.exceptions.TooManyRequestsException as exc:
+                # Explicit 429 — surface a rate-limit wording so the caller's
+                # backoff-retry recognizes it and the user sees a "try later" hint.
+                raise InstaDownloadError(
+                    f"Instagram is rate-limiting requests, please wait a few minutes: {exc}"
+                ) from exc
+            except (
+                instaloader.exceptions.ConnectionException,
+                instaloader.exceptions.BadResponseException,
+            ) as exc:
+                # Covers "Fetching Post metadata failed" and other 400/401/JSON
+                # errors Instagram returns to datacenter IPs. Usually transient —
+                # keep the wording so it's treated as retryable upstream.
+                raise InstaDownloadError(
+                    f"Instagram temporarily refused the request, please wait a few minutes: {exc}"
+                ) from exc
             except Exception as exc:
                 raise InstaDownloadError(f"Download failed: {exc}") from exc
 
