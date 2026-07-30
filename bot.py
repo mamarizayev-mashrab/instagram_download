@@ -198,10 +198,15 @@ def _is_admin(message: Message) -> bool:
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
-    # Admin-only: report the total number of unique users.
+    # Admin-only: total users, still-active (reachable), and blocked counts.
     if not _is_admin(message):
         return
-    await message.answer(f"👥 Foydalanuvchilar: <b>{users.count()}</b>")
+    await message.answer(
+        "📊 <b>Statistika</b>\n"
+        f"👥 Jami foydalanuvchilar: <b>{users.count()}</b>\n"
+        f"✅ Faol (xabar yetadi): <b>{users.active_count()}</b>\n"
+        f"🚫 Bloklaganlar: <b>{users.blocked_count()}</b>"
+    )
 
 
 @dp.message(Command("broadcast"))
@@ -231,7 +236,7 @@ async def cmd_broadcast(message: Message) -> None:
         )
         return
 
-    uids = users.all_ids()
+    uids = users.active_ids()   # skip users already known to have blocked the bot
     total = len(uids)
     if total == 0:
         await message.answer("Hali foydalanuvchilar yo'q.")
@@ -261,9 +266,9 @@ async def cmd_broadcast(message: Message) -> None:
             except Exception:
                 failed += 1
         except TelegramForbiddenError:
-            # User blocked the bot or deactivated their account → prune them.
+            # User blocked the bot or deactivated → flag them (shows up in /stats).
             blocked += 1
-            users.remove(uid)
+            users.mark_blocked(uid)
         except Exception as exc:
             failed += 1
             log.info("Broadcast to %s failed: %s", uid, exc)
