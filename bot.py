@@ -35,6 +35,7 @@ from downloaders.insta_downloader import InstaAuthError, InstaClient, InstaDownl
 from downloaders.ytdlp_downloader import DownloadError
 from utils import cache
 from utils import i18n
+from utils import users
 from utils.compress import compress_video
 from utils.files import collect_media, is_video, size_mb, temp_workdir
 from utils.media_meta import probe_with_thumb
@@ -83,6 +84,18 @@ insta_client: InstaClient | None = (
 )
 
 dp = Dispatcher()
+
+
+@dp.update.outer_middleware()
+async def _track_user(handler, event, data):
+    """Record every user who interacts with the bot (for /stats)."""
+    user = data.get("event_from_user")
+    if user is not None:
+        try:
+            users.track(user.id)
+        except Exception:
+            log.debug("User tracking failed", exc_info=True)
+    return await handler(event, data)
 
 
 def _lang_keyboard() -> InlineKeyboardMarkup:
@@ -146,6 +159,14 @@ async def cmd_help(message: Message) -> None:
 async def cmd_id(message: Message) -> None:
     # Handy for setting ADMIN_CHAT_ID: reply with this chat's numeric id.
     await message.answer(f"<code>{message.chat.id}</code>")
+
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message) -> None:
+    # Admin-only: report the total number of unique users.
+    if not ADMIN_CHAT_ID or str(message.chat.id) != ADMIN_CHAT_ID:
+        return
+    await message.answer(f"👥 Foydalanuvchilar: <b>{users.count()}</b>")
 
 
 @dp.message(Command("language", "lang"))

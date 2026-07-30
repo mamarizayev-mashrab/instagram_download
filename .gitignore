@@ -2,6 +2,7 @@
 .sessions/
 cache.json
 userlang.json
+users.json
 __pycache__/
 *.pyc
 *.mp4
