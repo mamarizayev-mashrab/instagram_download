@@ -18,6 +18,7 @@ import time
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     CallbackQuery,
@@ -177,12 +178,95 @@ async def cmd_id(message: Message) -> None:
     await message.answer(f"<code>{message.chat.id}</code>")
 
 
+def _is_admin(message: Message) -> bool:
+    return bool(ADMIN_CHAT_ID) and str(message.chat.id) == ADMIN_CHAT_ID
+
+
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     # Admin-only: report the total number of unique users.
-    if not ADMIN_CHAT_ID or str(message.chat.id) != ADMIN_CHAT_ID:
+    if not _is_admin(message):
         return
     await message.answer(f"👥 Foydalanuvchilar: <b>{users.count()}</b>")
+
+
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: Message) -> None:
+    """Admin-only: send a message to every known user.
+
+    Two ways to use it:
+      • Reply to any message (text/photo/video/…) with /broadcast — that exact
+        message is copied to everyone.
+      • /broadcast <text> — sends the text (HTML formatting supported).
+    """
+    if not _is_admin(message):
+        return
+
+    reply = message.reply_to_message
+    text = ""
+    parts = (message.text or message.caption or "").split(maxsplit=1)
+    if len(parts) > 1:
+        text = parts[1].strip()
+
+    if reply is None and not text:
+        await message.answer(
+            "📣 <b>Broadcast</b>\n\n"
+            "Xabar yuboring: <code>/broadcast matn</code>\n"
+            "yoki istalgan xabarga <b>reply</b> qilib <code>/broadcast</code> deb yozing "
+            "(rasm/video ham yuboriladi)."
+        )
+        return
+
+    uids = users.all_ids()
+    total = len(uids)
+    if total == 0:
+        await message.answer("Hali foydalanuvchilar yo'q.")
+        return
+
+    progress = await message.answer(f"📤 Yuborilyapti… 0/{total}")
+    sent = blocked = failed = 0
+    # Telegram tolerates ~30 msgs/sec; stay comfortably under it.
+    delay = float(os.getenv("BROADCAST_DELAY", "0.05"))
+
+    for i, uid in enumerate(uids, 1):
+        try:
+            if reply is not None:
+                await message.bot.copy_message(uid, reply.chat.id, reply.message_id)
+            else:
+                await message.bot.send_message(uid, text)
+            sent += 1
+        except TelegramRetryAfter as exc:
+            # Hit the flood limit — wait it out, then retry this same user once.
+            await asyncio.sleep(exc.retry_after + 1)
+            try:
+                if reply is not None:
+                    await message.bot.copy_message(uid, reply.chat.id, reply.message_id)
+                else:
+                    await message.bot.send_message(uid, text)
+                sent += 1
+            except Exception:
+                failed += 1
+        except TelegramForbiddenError:
+            # User blocked the bot or deactivated their account → prune them.
+            blocked += 1
+            users.remove(uid)
+        except Exception as exc:
+            failed += 1
+            log.info("Broadcast to %s failed: %s", uid, exc)
+
+        if i % 25 == 0 or i == total:
+            try:
+                await progress.edit_text(f"📤 Yuborilyapti… {i}/{total}")
+            except Exception:
+                pass
+        await asyncio.sleep(delay)
+
+    await progress.edit_text(
+        f"✅ Broadcast tugadi.\n"
+        f"Yuborildi: <b>{sent}</b>\n"
+        f"Bloklagan/o'chirilgan: <b>{blocked}</b>\n"
+        f"Xato: <b>{failed}</b>"
+    )
 
 
 @dp.message(Command("language", "lang"))

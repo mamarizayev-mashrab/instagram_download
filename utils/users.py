@@ -71,3 +71,34 @@ def count() -> int:
     with _lock:
         _load()
         return len(_ids)
+
+
+def all_ids() -> list[int]:
+    """Every known user id, as ints (for broadcasting)."""
+    with _lock:
+        _load()
+        out = []
+        for u in _ids:
+            try:
+                out.append(int(u))
+            except (TypeError, ValueError):
+                pass
+        return out
+
+
+def remove(user_id: int) -> None:
+    """Drop a user (e.g. they blocked the bot) so counts/broadcasts stay clean."""
+    uid = str(user_id)
+    with _lock:
+        _load()
+        if uid not in _ids:
+            return
+        _ids.discard(uid)
+        r = _redis()
+        if r is not None:
+            try:
+                r.srem(_REDIS_SET, uid)
+                return
+            except Exception:
+                pass  # fall back to the file store
+        _save()
