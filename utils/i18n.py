@@ -122,6 +122,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "u hali sozlanmagan."
         ),
         "downloading": "⏳ Yuklanmoqda...",
+        "busy": "⏳ Avvalgi so'rovingiz hali bajarilyapti — biroz kuting.",
         "probing": "⏳ Video ma'lumoti olinmoqda...",
         "downloading_pct": "⏳ Yuklanmoqda... {pct}%",
         "downloading_mb": "⏳ Yuklanmoqda... {mb} MB",
@@ -178,6 +179,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "which isn't configured yet."
         ),
         "downloading": "⏳ Downloading...",
+        "busy": "⏳ Your previous request is still running — please wait a moment.",
         "probing": "⏳ Fetching video info...",
         "downloading_pct": "⏳ Downloading... {pct}%",
         "downloading_mb": "⏳ Downloading... {mb} MB",
@@ -234,6 +236,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "который ещё не настроен."
         ),
         "downloading": "⏳ Загрузка...",
+        "busy": "⏳ Ваш предыдущий запрос ещё выполняется — подождите немного.",
         "probing": "⏳ Получаю информацию о видео...",
         "downloading_pct": "⏳ Загрузка... {pct}%",
         "downloading_mb": "⏳ Загрузка... {mb} МБ",
@@ -290,6 +293,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "henüz yapılandırılmadı."
         ),
         "downloading": "⏳ İndiriliyor...",
+        "busy": "⏳ Önceki isteğiniz hâlâ sürüyor — lütfen biraz bekleyin.",
         "probing": "⏳ Video bilgileri alınıyor...",
         "downloading_pct": "⏳ İndiriliyor... {pct}%",
         "downloading_mb": "⏳ İndiriliyor... {mb} MB",

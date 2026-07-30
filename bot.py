@@ -67,6 +67,22 @@ MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", _default_limit))
 MAX_CONCURRENT_DOWNLOADS = max(1, int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2")))
 _download_sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
+# One in-flight download per user, so a single user can't queue a flood of links
+# and monopolise the (global) download slots.
+_active_users: set[int] = set()
+
+
+def _acquire_user(uid: int) -> bool:
+    """Reserve the per-user download slot. False if the user already has one running."""
+    if uid in _active_users:
+        return False
+    _active_users.add(uid)
+    return True
+
+
+def _release_user(uid: int) -> None:
+    _active_users.discard(uid)
+
 # A valid YouTube video id (used to sanity-check callback data before building a URL).
 _YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -220,6 +236,9 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
         log.info("Cache hit for %s", key)
         return
 
+    if not _acquire_user(uid):
+        await call.message.answer(i18n.t(uid, "busy"))
+        return
     status = await call.message.answer(i18n.t(uid, "downloading"))
     try:
         async with _download_sem:
@@ -250,6 +269,8 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
         log.exception("Unexpected YouTube error")
         await status.edit_text(i18n.t(uid, "unexpected"))
         await _alert_admin(call.bot, "yt_unexpected", f"Unexpected YouTube error: {exc}")
+    finally:
+        _release_user(uid)
 
 
 async def _alert_admin(bot: Bot, key: str, text: str, cooldown: int = 600) -> None:
@@ -558,9 +579,12 @@ async def handle_link(message: Message) -> None:
     if req.content_type == ContentType.YOUTUBE:
         vid = req.shortcode
         probing = await message.answer(i18n.t(uid, "probing"))
-        meta = await ytdlp_downloader.probe_youtube(
-            f"https://www.youtube.com/watch?v={vid}"
-        )
+        # Probe spawns a yt-dlp worker thread; keep it under the same global cap
+        # as downloads so a burst of YouTube links can't spawn N parallel threads.
+        async with _download_sem:
+            meta = await ytdlp_downloader.probe_youtube(
+                f"https://www.youtube.com/watch?v={vid}"
+            )
         text = i18n.t(uid, "yt_choose")
         if meta and meta.get("title"):
             head = f"🎬 <b>{html.escape(meta['title'])[:120]}</b>"
@@ -577,6 +601,9 @@ async def handle_link(message: Message) -> None:
 
     # Other public video hosts (TikTok / X / Facebook / …) → direct best-fit.
     if req.content_type == ContentType.GENERIC:
+        if not _acquire_user(uid):
+            await message.answer(i18n.t(uid, "busy"))
+            return
         status = await message.answer(i18n.t(uid, "downloading"))
         try:
             async with _download_sem:
@@ -597,6 +624,8 @@ async def handle_link(message: Message) -> None:
             log.exception("Unexpected generic error")
             await status.edit_text(i18n.t(uid, "unexpected"))
             await _alert_admin(message.bot, "generic_unexpected", f"Generic error: {exc}")
+        finally:
+            _release_user(uid)
         return
 
     if _needs_login(req) and insta_client is None:
@@ -611,6 +640,9 @@ async def handle_link(message: Message) -> None:
             log.info("Cache hit for %s", key)
             return
 
+    if not _acquire_user(uid):
+        await message.answer(i18n.t(uid, "busy"))
+        return
     status = await message.answer(i18n.t(uid, "downloading"))
     try:
         async with _download_sem:
@@ -632,6 +664,8 @@ async def handle_link(message: Message) -> None:
         log.exception("Unexpected error")
         await status.edit_text(i18n.t(uid, "unexpected"))
         await _alert_admin(message.bot, "ig_unexpected", f"Unexpected error: {exc}")
+    finally:
+        _release_user(uid)
 
 
 def _make_bot() -> Bot:
@@ -715,7 +749,13 @@ def main_webhook() -> None:
     app = web.Application()
     app.router.add_get("/", health)          # Render health check + keep-alive pings
     app.router.add_get("/healthz", health)
-    SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=secret).register(app, path=path)
+    # handle_in_background=True: process the update AFTER returning 200 to Telegram.
+    # Downloads routinely take longer than Telegram's ~60s webhook timeout, so
+    # processing inline would make Telegram re-deliver the update and we'd download
+    # (and send) the same media two or three times.
+    SimpleRequestHandler(
+        dispatcher=dp, bot=bot, secret_token=secret, handle_in_background=True
+    ).register(app, path=path)
     setup_application(app, dp, bot=bot)
     app.on_startup.append(on_startup)
 
