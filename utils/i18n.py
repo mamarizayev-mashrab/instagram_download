@@ -136,6 +136,11 @@ TEXTS: dict[str, dict[str, str]] = {
         ),
         "auth_error": "🔑 Instagram login muammosi. Egasi ma'lumotlarni tekshirishi kerak.",
         "download_error": "❌ Buni yuklab bo'lmadi.\n<i>{err}</i>",
+        "err_private": "🔒 Bu akkaunt yopiq — yopiq profillardan yuklab bo'lmaydi.",
+        "err_deleted": "🗑 Bu post o'chirilgan yoki mavjud emas.",
+        "err_age": "🔞 Bu video yoshga cheklangan — yuklab bo'lmadi.",
+        "err_geo": "🌍 Bu media sizning hududingizda bloklangan.",
+        "err_members": "⭐ Bu video faqat obunachilar/a'zolar uchun — yuklab bo'lmaydi.",
         "unexpected": "💥 Nimadir xato ketdi. Birozdan keyin qayta urinib ko'ring.",
         "highlight_no_user": (
             "Highlight havolasida username yo'q. "
@@ -193,6 +198,11 @@ TEXTS: dict[str, dict[str, str]] = {
         ),
         "auth_error": "🔑 Instagram login problem. The owner should re-check credentials.",
         "download_error": "❌ Couldn't download that.\n<i>{err}</i>",
+        "err_private": "🔒 This account is private — content from private profiles can't be downloaded.",
+        "err_deleted": "🗑 This post was deleted or doesn't exist.",
+        "err_age": "🔞 This video is age-restricted and couldn't be downloaded.",
+        "err_geo": "🌍 This media is blocked in your region.",
+        "err_members": "⭐ This video is members-only and can't be downloaded.",
         "unexpected": "💥 Something went wrong. Please try again later.",
         "highlight_no_user": (
             "Highlight links don't include the username. "
@@ -250,6 +260,11 @@ TEXTS: dict[str, dict[str, str]] = {
         ),
         "auth_error": "🔑 Проблема входа в Instagram. Владельцу нужно проверить данные.",
         "download_error": "❌ Не удалось скачать.\n<i>{err}</i>",
+        "err_private": "🔒 Этот аккаунт закрытый — из приватных профилей скачать нельзя.",
+        "err_deleted": "🗑 Этот пост удалён или не существует.",
+        "err_age": "🔞 Видео с возрастным ограничением — скачать не удалось.",
+        "err_geo": "🌍 Это медиа заблокировано в вашем регионе.",
+        "err_members": "⭐ Видео только для подписчиков/участников — скачать нельзя.",
         "unexpected": "💥 Что-то пошло не так. Попробуйте позже.",
         "highlight_no_user": (
             "В ссылке на highlight нет имени пользователя. "
@@ -307,6 +322,11 @@ TEXTS: dict[str, dict[str, str]] = {
         ),
         "auth_error": "🔑 Instagram giriş sorunu. Sahibinin bilgileri kontrol etmesi gerekir.",
         "download_error": "❌ Bu indirilemedi.\n<i>{err}</i>",
+        "err_private": "🔒 Bu hesap gizli — gizli profillerden indirilemez.",
+        "err_deleted": "🗑 Bu gönderi silinmiş veya mevcut değil.",
+        "err_age": "🔞 Bu video yaş sınırlı — indirilemedi.",
+        "err_geo": "🌍 Bu medya bölgenizde engelli.",
+        "err_members": "⭐ Bu video yalnızca üyeler için — indirilemez.",
         "unexpected": "💥 Bir şeyler ters gitti. Lütfen sonra tekrar deneyin.",
         "highlight_no_user": (
             "Highlight bağlantısında kullanıcı adı yok. "

@@ -14,19 +14,26 @@ import os
 import re
 import secrets
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InlineQueryResultCachedAudio,
+    InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedVideo,
     InputMediaPhoto,
     InputMediaVideo,
+    InputTextMessageContent,
     Message,
 )
 from dotenv import load_dotenv
@@ -159,8 +166,15 @@ def _yt_keyboard(vid: str, sizes: dict | None = None) -> InlineKeyboardMarkup:
 
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, command: CommandObject) -> None:
     uid = message.from_user.id
+    # Deep link from the inline "open bot to download" button → fetch it straight away.
+    arg = (command.args or "").strip()
+    if arg:
+        link = _payload_to_text(arg)
+        if link:
+            await _process_link(message, link)
+            return
     await message.answer(i18n.t(uid, "welcome"))
     # First-time users: also show the language picker.
     if not i18n.has_lang(uid):
@@ -343,7 +357,7 @@ async def on_youtube_quality(call: CallbackQuery) -> None:
         await status.delete()
     except DownloadError as exc:
         log.info("YouTube download error: %s", exc)
-        await status.edit_text(i18n.t(uid, "download_error", err=exc))
+        await status.edit_text(_err_text(uid, exc))
         if _looks_like_auth_issue(exc):
             await _alert_admin(
                 call.bot, "yt_auth",
@@ -446,6 +460,46 @@ def _cache_key(req: ParsedRequest) -> str | None:
     if req.content_type in _CACHEABLE and req.shortcode:
         return f"{req.content_type.value}:{req.shortcode}"
     return None
+
+
+def _generic_cache_key(url: str | None) -> str | None:
+    """Cache key for TikTok/X/Facebook/Reddit URLs. Query is kept (some hosts,
+    e.g. Facebook watch?v=, need it) and only the fragment is dropped, so a hit
+    always means the same content — never a false match."""
+    if not url:
+        return None
+    try:
+        s = urlsplit(url.strip())
+        norm = urlunsplit((s.scheme.lower(), s.netloc.lower(), s.path.rstrip("/"), s.query, ""))
+    except Exception:
+        norm = url.strip()
+    return f"generic:{norm}"
+
+
+# Message substrings → a specific, translated error key (falls back to a generic one).
+_ERROR_SIGNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("err_age", ("confirm your age", "age-restricted", "age restricted", "inappropriate for some users")),
+    ("err_members", ("members-only", "members only", "join this channel", "join to watch")),
+    ("err_geo", ("not available in your country", "geo restrict", "geoblock", "blocked in your country")),
+    ("err_private", ("is private", "private and not followed", "login required", "log in to", "requested content is not available")),
+    ("err_deleted", ("not exist", "unavailable", "has been removed", "no longer available", "not found", "404", "deleted", "removed by")),
+)
+
+
+def _error_key(exc: Exception) -> str:
+    m = str(exc).lower()
+    for key, signs in _ERROR_SIGNS:
+        if any(s in m for s in signs):
+            return key
+    return "download_error"
+
+
+def _err_text(uid: int, exc: Exception) -> str:
+    """Translated, user-friendly text for a download failure."""
+    key = _error_key(exc)
+    if key == "download_error":
+        return i18n.t(uid, "download_error", err=exc)
+    return i18n.t(uid, key)
 
 
 def _looks_rate_limited(exc: Exception) -> bool:
@@ -650,10 +704,132 @@ async def _send_from_cache(message: Message, items: list[dict]) -> bool:
         return False
 
 
+# ---- inline mode (@botname <link> in any chat) --------------------------------
+
+_bot_username: str | None = None
+
+
+async def _bot_user(bot: Bot) -> str:
+    """The bot's @username (cached), needed for deep links in inline results."""
+    global _bot_username
+    if _bot_username is None:
+        me = await bot.me()
+        _bot_username = me.username or ""
+    return _bot_username
+
+
+def _deeplink_payload(req: ParsedRequest) -> str | None:
+    """A short, url-safe /start payload that re-identifies this content (<=64 chars)."""
+    if req.content_type == ContentType.YOUTUBE and req.shortcode:
+        return f"yt_{req.shortcode}"
+    prefix = {
+        ContentType.REEL: "igr_", ContentType.POST: "igp_", ContentType.IGTV: "igt_",
+    }.get(req.content_type)
+    if prefix and req.shortcode:
+        return f"{prefix}{req.shortcode}"
+    return None
+
+
+def _payload_to_text(payload: str) -> str | None:
+    """Reverse of _deeplink_payload: rebuild a link the parser understands."""
+    payload = (payload or "").strip()
+    if payload.startswith("yt_"):
+        return f"https://www.youtube.com/watch?v={payload[3:]}"
+    if payload.startswith("igr_"):
+        return f"https://www.instagram.com/reel/{payload[4:]}/"
+    if payload.startswith("igp_"):
+        return f"https://www.instagram.com/p/{payload[4:]}/"
+    if payload.startswith("igt_"):
+        return f"https://www.instagram.com/tv/{payload[4:]}/"
+    return None
+
+
+def _inline_from_cache(items: list[dict]) -> list:
+    """Turn cached file_ids into inline results Telegram can serve instantly."""
+    out: list = []
+    for i, it in enumerate(items[:10]):
+        fid = it.get("file_id")
+        if not fid:
+            continue
+        kind = it.get("kind")
+        if kind == "video":
+            out.append(InlineQueryResultCachedVideo(id=str(i), video_file_id=fid, title="Video"))
+        elif kind == "audio":
+            out.append(InlineQueryResultCachedAudio(id=str(i), audio_file_id=fid))
+        else:
+            out.append(InlineQueryResultCachedPhoto(id=str(i), photo_file_id=fid))
+    return out
+
+
+@dp.inline_query()
+async def on_inline_query(query: InlineQuery) -> None:
+    """Serve already-cached media instantly in any chat; otherwise offer a button
+    that opens the bot and downloads it."""
+    uid = query.from_user.id
+    text = (query.query or "").strip()
+    if not text:
+        await query.answer(
+            [InlineQueryResultArticle(
+                id="hint",
+                title="🔗 Havola yuboring / Send a link",
+                description="Instagram · YouTube · TikTok · X · Facebook",
+                input_message_content=InputTextMessageContent(message_text=i18n.t(uid, "help")),
+            )],
+            cache_time=10, is_personal=True,
+        )
+        return
+
+    req = parse(text)
+    if req.content_type == ContentType.YOUTUBE and req.shortcode:
+        key = f"youtube:{req.shortcode}:720"   # inline serves the default quality
+    elif req.content_type == ContentType.GENERIC:
+        key = _generic_cache_key(req.url)
+    else:
+        key = _cache_key(req)
+
+    cached = cache.get(key) if key else None
+    if cached:
+        results = _inline_from_cache(cached)
+        if results:
+            await query.answer(results, cache_time=300, is_personal=False)
+            return
+
+    # Not cached (or not cacheable) → a button that opens the bot to fetch it.
+    username = await _bot_user(query.bot)
+    payload = _deeplink_payload(req)
+    if username and payload:
+        deep = f"https://t.me/{username}?start={payload}"
+    elif username:
+        deep = f"https://t.me/{username}"
+    else:
+        deep = None
+    kb = None
+    if deep:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="▶️ Botda yuklab olish", url=deep)]
+        ])
+    await query.answer(
+        [InlineQueryResultArticle(
+            id="download",
+            title="⚡ Yuklab olish uchun bosing",
+            description="Botni ochib shu havolani yuklab oling.",
+            input_message_content=InputTextMessageContent(message_text=text),
+            reply_markup=kb,
+        )],
+        cache_time=5, is_personal=True,
+    )
+
+
 @dp.message(F.text)
 async def handle_link(message: Message) -> None:
+    await _process_link(message, message.text or "")
+
+
+async def _process_link(message: Message, text: str) -> None:
+    """Classify `text` and route it to the right downloader. Shared by the text
+    handler and the /start deep-link (inline "open bot to download") flow."""
     uid = message.from_user.id
-    req = parse(message.text)
+    req = parse(text)
 
     if req.content_type == ContentType.UNKNOWN:
         await message.answer(i18n.t(uid, "unknown"))
@@ -685,6 +861,13 @@ async def handle_link(message: Message) -> None:
 
     # Other public video hosts (TikTok / X / Facebook / …) → direct best-fit.
     if req.content_type == ContentType.GENERIC:
+        # Instant resend if we've already fetched this exact URL before.
+        gkey = _generic_cache_key(req.url)
+        if gkey:
+            cached = cache.get(gkey)
+            if cached and await _send_from_cache(message, cached):
+                log.info("Cache hit for %s", gkey)
+                return
         if not _acquire_user(uid):
             await message.answer(i18n.t(uid, "busy"))
             return
@@ -699,11 +882,13 @@ async def handle_link(message: Message) -> None:
                         status, uid,
                     )
                     files = collect_media(workdir) or files
-                    await _send_media(message, files, uid)
+                    sent = await _send_media(message, files, uid)
+                    if gkey and sent:
+                        cache.put(gkey, sent)  # remember for instant future resends
             await status.delete()
         except DownloadError as exc:
             log.info("Generic download error: %s", exc)
-            await status.edit_text(i18n.t(uid, "download_error", err=exc))
+            await status.edit_text(_err_text(uid, exc))
         except Exception as exc:
             log.exception("Unexpected generic error")
             await status.edit_text(i18n.t(uid, "unexpected"))
@@ -743,7 +928,7 @@ async def handle_link(message: Message) -> None:
         await _alert_admin(message.bot, "ig_auth", f"Instagram auth/session problem:\n{exc}")
     except (DownloadError, InstaDownloadError) as exc:
         log.info("Download error: %s", exc)
-        await status.edit_text(i18n.t(uid, "download_error", err=exc))
+        await status.edit_text(_err_text(uid, exc))
     except Exception as exc:  # never let one bad request kill the bot
         log.exception("Unexpected error")
         await status.edit_text(i18n.t(uid, "unexpected"))
